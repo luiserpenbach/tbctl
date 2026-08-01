@@ -108,6 +108,13 @@ def build_app(ctx: NodeContext) -> FastAPI:
 
         remove_sink = ctx.events.add_sink(ws_sink)
         ctx.iface.open()
+        if not ctx.sim:
+            # real T7: verify the deployed interpreter and arm the hardware
+            # watchdog (safety layer 2) before anything else touches DIO
+            from tbctl.hw.watchdog import configure_watchdog
+
+            await asyncio.to_thread(ctx.sequencer.check_interp_version)
+            await asyncio.to_thread(configure_watchdog, ctx.iface, ctx.bundle.channels.model)
         await ctx.acq.start()
         hub.start()
         log.info(

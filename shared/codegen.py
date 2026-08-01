@@ -32,6 +32,7 @@ REGISTERS_YAML = REPO_ROOT / "shared" / "registers.yaml"
 VENDORED_CONSTANTS = REPO_ROOT / "shared" / "vendor" / "ljm_constants.json"
 PY_OUT = REPO_ROOT / "src" / "tbctl" / "hw" / "registers_gen.py"
 LUA_OUT = REPO_ROOT / "lua" / "gen" / "registers_gen.lua"
+SEQUENCER_OUT = REPO_ROOT / "lua" / "sequencer.lua"
 
 LJM_SEARCH_PATHS = [
     "/usr/local/share/LabJack/LJM/ljm_constants.json",
@@ -226,15 +227,39 @@ def gen_lua(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> str
         if const == "arm_magic":
             continue
         lines.append(f"local {const.upper()} = {val}")
+    lines.append(f"local ALLOCATE_BYTES = {spec['fifo']['table_upload']['allocate_bytes']}")
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def gen_sequencer(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> str:
+    """Assemble the deployable lua/sequencer.lua from its three parts."""
+    header = gen_lua(spec, resolved, ljm)
+    crc_src = (REPO_ROOT / "lua" / "crc16.lua").read_text()
+    # strip the module-export return so the chunk continues into the main body
+    crc_lines = [ln for ln in crc_src.splitlines() if not ln.startswith("return {")]
+    main = (REPO_ROOT / "lua" / "sequencer_main.lua").read_text()
+    banner = (
+        "-- ===========================================================================\n"
+        f"-- tbctl sequencer.lua -- ASSEMBLED ARTIFACT, DO NOT EDIT DIRECTLY.\n"
+        f"-- interp_version {spec['meta']['interp_version']} | {_stamp(ljm)}\n"
+        "-- Edit lua/sequencer_main.lua (logic), lua/crc16.lua (CRC) or\n"
+        "-- shared/registers.yaml (interface), then run `tbctl codegen`.\n"
+        "-- DO NOT EDIT LOGIC WITHOUT BUMPING INTERP_VERSION AND RERUNNING §10.3.\n"
+        "-- ===========================================================================\n\n"
+    )
+    return banner + header + "\n" + "\n".join(crc_lines) + "\n" + main
 
 
 def generate(check: bool = False) -> int:
     ljm = LjmConstants(find_constants_file())
     spec = load_spec()
     resolved = resolve_all(spec, ljm)
-    outputs = {PY_OUT: gen_python(spec, resolved, ljm), LUA_OUT: gen_lua(spec, resolved, ljm)}
+    outputs = {
+        PY_OUT: gen_python(spec, resolved, ljm),
+        LUA_OUT: gen_lua(spec, resolved, ljm),
+        SEQUENCER_OUT: gen_sequencer(spec, resolved, ljm),
+    }
     rc = 0
     for path, content in outputs.items():
         if check:

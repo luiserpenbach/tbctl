@@ -54,6 +54,33 @@ def cmd_codegen(args: argparse.Namespace) -> int:
     return codegen.generate(check=args.check)
 
 
+def cmd_deploy_lua(args: argparse.Namespace) -> int:
+    from tbctl.config.loader import load_channels
+    from tbctl.hw.ljm_iface import LjmDevice
+    from tbctl.hw.script_loader import ScriptLoadError, deploy_script, read_debug
+    from tbctl.hw.watchdog import configure_watchdog
+
+    chmap = load_channels(Path(args.config_dir) / "channels.yaml").model
+    ip = args.ip or chmap.device.ip
+    dev = LjmDevice(ip)
+    print(f"connecting to T7 at {ip}…")
+    dev.open()
+    try:
+        version = deploy_script(dev, save_to_flash=not args.no_flash)
+        print(f"sequencer.lua deployed and running (interp_version {version})")
+        applied = configure_watchdog(dev, chmap)
+        print(f"hardware watchdog armed: timeout {applied['WATCHDOG_TIMEOUT_S_DEFAULT']:.0f} s")
+        return 0
+    except ScriptLoadError as e:
+        print(f"deploy failed: {e}", file=sys.stderr)
+        debug = read_debug(dev)
+        if debug:
+            print(f"LUA_DEBUG:\n{debug}", file=sys.stderr)
+        return 1
+    finally:
+        dev.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tbctl", description="testbench control CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -67,6 +94,16 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="verify outputs are in sync, don't write"
     )
     p_gen.set_defaults(func=cmd_codegen)
+
+    p_dep = sub.add_parser(
+        "deploy-lua", help="upload lua/sequencer.lua to the T7 and arm the hardware watchdog"
+    )
+    p_dep.add_argument("--config-dir", default="configs")
+    p_dep.add_argument("--ip", default=None, help="override device IP from channels.yaml")
+    p_dep.add_argument(
+        "--no-flash", action="store_true", help="don't persist the script across power cycles"
+    )
+    p_dep.set_defaults(func=cmd_deploy_lua)
 
     args = parser.parse_args(argv)
     return args.func(args)
