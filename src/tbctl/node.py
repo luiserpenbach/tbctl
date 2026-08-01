@@ -21,7 +21,9 @@ from fastapi import FastAPI
 from tbctl.config.loader import ConfigBundle, ConfigError, load_config_dir
 from tbctl.services.acquisition import AcquisitionService
 from tbctl.services.events import EventLog
+from tbctl.services.manual_control import ManualControl
 from tbctl.services.recorder import Recorder
+from tbctl.services.sequencer import SequencerService
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,8 @@ class NodeContext:
     acq: AcquisitionService
     events: EventLog
     recorder: Recorder
+    sequencer: SequencerService
+    manual: ManualControl
     sim: bool
     config_dir: Path
     control_enabled: bool = False
@@ -74,12 +78,16 @@ def build_context(
     events = EventLog(log_dir or Path("logs"))
     recorder = Recorder(chmap, bundle.channels.sha256, acq, data_dir, _git_hash())
     events.add_sink(recorder.on_event)
+    sequencer = SequencerService(bundle, iface, acq, events)
+    manual = ManualControl(chmap, iface, events)
     return NodeContext(
         bundle=bundle,
         iface=iface,
         acq=acq,
         events=events,
         recorder=recorder,
+        sequencer=sequencer,
+        manual=manual,
         sim=sim,
         config_dir=config_dir,
         data_dir=data_dir,
@@ -111,6 +119,7 @@ def build_app(ctx: NodeContext) -> FastAPI:
         try:
             yield
         finally:
+            await ctx.sequencer.shutdown()
             if ctx.recorder.active:
                 await ctx.recorder.stop_run()
             remove_sink()

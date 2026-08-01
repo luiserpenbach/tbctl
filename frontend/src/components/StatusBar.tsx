@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { saveDashboard } from "../api";
+import { fetchStatus, saveDashboard, setControlMode } from "../api";
 import { useStore } from "../store";
 
 export function StatusBar() {
@@ -41,6 +41,17 @@ export function StatusBar() {
       <span className={`chip ${recording ? "rec" : ""}`}>
         <span className="dot" />{recording ? "REC" : "IDLE"}
       </span>
+      <button
+        className={`btn ${status?.control_enabled ? "danger-active" : ""}`}
+        title="gates manual valves and ARM"
+        onClick={() =>
+          setControlMode(!(status?.control_enabled ?? false)).then(() =>
+            fetchStatus().then((s) => useStore.getState().setStatus(s)),
+          )
+        }
+      >
+        {status?.control_enabled ? "CONTROL ON" : "control off"}
+      </button>
       {editMode && dashboard && (
         <button
           className="btn"

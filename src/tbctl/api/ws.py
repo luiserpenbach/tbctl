@@ -87,6 +87,11 @@ class WsHub:
     async def _emit_loop(self) -> None:
         while True:
             await asyncio.sleep(EMIT_INTERVAL_S)
+            try:
+                # stop the heartbeat when the sequencer reaches a terminal state
+                await self._ctx.sequencer.watch_terminal()
+            except Exception:
+                log.exception("sequencer terminal watch failed")
             if not self._clients:
                 continue
             try:

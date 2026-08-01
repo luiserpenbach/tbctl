@@ -27,6 +27,19 @@ class RunStart(BaseModel):
     notes: str = ""
 
 
+class Confirm(BaseModel):
+    confirm: str
+
+
+class ManualValve(BaseModel):
+    tag: str
+    state: str
+
+
+class ControlMode(BaseModel):
+    enabled: bool
+
+
 def build_router(ctx: NodeContext) -> APIRouter:
     r = APIRouter(prefix="/api")
 
@@ -101,6 +114,7 @@ def build_router(ctx: NodeContext) -> APIRouter:
             else:
                 entry["fail_safe"] = c.fail_safe
                 entry["bit"] = chmap.bit_index(c.tag)
+                entry["active_level"] = chmap.active_level(c)
             out.append(entry)
         return {
             "channels": out,
@@ -121,6 +135,101 @@ def build_router(ctx: NodeContext) -> APIRouter:
         except KeyError as e:
             raise HTTPException(404, str(e)) from e
         return {"window_s": window_s, "series": data}
+
+    # -------------------------------------------------------- sequencer
+
+    @r.get("/sequences")
+    def sequences() -> dict:
+        out = []
+        for name, s in sorted(ctx.bundle.sequences.items()):
+            out.append(
+                {
+                    "name": name,
+                    "description": s.model.description,
+                    "n_steps": len(s.model.steps),
+                    "n_abort_steps": len(s.model.abort),
+                    "max_duration_s": s.model.max_duration_s,
+                    "allow_unsafe_end": s.model.allow_unsafe_end,
+                    "sha256": s.sha256,
+                    "loaded": ctx.sequencer.loaded is not None
+                    and ctx.sequencer.loaded.name == name,
+                }
+            )
+        return {"sequences": out}
+
+    def _seq_err(e: Exception) -> HTTPException:
+        return HTTPException(409, str(e))
+
+    @r.post("/sequences/{name}/load")
+    async def seq_load(name: str) -> dict:
+        from tbctl.services.compiler import CompileError
+        from tbctl.services.sequencer import SequencerError
+
+        try:
+            report = await ctx.sequencer.load(name)
+        except CompileError as e:
+            raise HTTPException(422, str(e)) from e
+        except SequencerError as e:
+            raise _seq_err(e) from e
+        ctx.recorder.sequence_sha256 = ctx.sequencer.loaded.sha256
+        return report
+
+    @r.post("/sequences/arm")
+    async def seq_arm(body: Confirm) -> dict:
+        from tbctl.services.sequencer import SequencerError
+
+        try:
+            await ctx.sequencer.arm(body.confirm, ctx.control_enabled)
+        except SequencerError as e:
+            raise _seq_err(e) from e
+        return {"ok": True, "state": ctx.sequencer.state().name}
+
+    @r.post("/sequences/fire")
+    async def seq_fire(body: Confirm) -> dict:
+        from tbctl.services.sequencer import SequencerError
+
+        try:
+            await ctx.sequencer.fire(body.confirm)
+        except SequencerError as e:
+            raise _seq_err(e) from e
+        return {"ok": True, "state": ctx.sequencer.state().name}
+
+    @r.post("/sequences/abort")
+    async def seq_abort() -> dict:
+        # ALWAYS accepted, no body, fastest path in the API (§7)
+        await ctx.sequencer.abort()
+        return {"ok": True}
+
+    @r.post("/sequences/reset")
+    async def seq_reset() -> dict:
+        from tbctl.services.sequencer import SequencerError
+
+        try:
+            await ctx.sequencer.reset()
+        except SequencerError as e:
+            raise _seq_err(e) from e
+        return {"ok": True, "state": ctx.sequencer.state().name}
+
+    @r.get("/sequences/preconditions")
+    def seq_preconditions() -> dict:
+        return {"failures": ctx.sequencer.check_preconditions()}
+
+    # ---------------------------------------------------- manual control
+
+    @r.post("/manual/valve")
+    def manual_valve(body: ManualValve) -> dict:
+        from tbctl.services.manual_control import ManualControlError
+
+        try:
+            return ctx.manual.set_output(body.tag, body.state, ctx.control_enabled)
+        except ManualControlError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @r.post("/control-mode")
+    def control_mode(body: ControlMode) -> dict:
+        ctx.control_enabled = body.enabled
+        ctx.events.log("control_mode", enabled=body.enabled)
+        return {"enabled": ctx.control_enabled}
 
     # ------------------------------------------------------------- runs
 

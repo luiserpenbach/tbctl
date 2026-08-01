@@ -9,6 +9,7 @@ export interface ChannelInfo {
   rate_hz?: number;
   fail_safe?: string;
   bit?: number;
+  active_level?: number;
 }
 
 export interface NodeStatus {
