@@ -1,0 +1,15 @@
+# CRC-16/CCITT-FALSE golden vectors (spec D8, §10.1)
+# Shared by tests/test_crc.py and tests/lua/run_crc_tests.lua.
+# Format: <hex bytes or '-' for empty>  <expected crc16 hex>  # comment
+#
+# The '123456789' vector is the externally published check value for
+# CRC-16/CCITT-FALSE (0x29B1) and anchors both implementations.
+
+-  FFFF  # empty input -> init value
+00  E1F0  # single zero byte
+ff  FF00  # single 0xFF
+313233343536373839  29B1  # standard check string '123456789' (published: 0x29B1)
+00000000000000000000  E139  # ten zero bytes
+000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff  3FBD  # 0x00..0xFF ramp
+a55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55a  77E8  # alternating A5 5A x64
+03000200c0ff0000d007000000000100d00700000300881300000000000000000000640000000400  8B85  # realistic step-table payload (header+3 steps+2 abort)

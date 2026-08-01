@@ -1,0 +1,120 @@
+# =============================================================================
+# tbctl register slot map — THE single source of truth (spec D10).
+#
+# Symbolic USER_RAM slot allocation for the host <-> T7-Lua interface,
+# FIFO configuration, and all shared enums/constants.
+#
+# shared/codegen.py consumes this file plus LJM's ljm_constants.json and
+# generates:
+#   - src/tbctl/hw/registers_gen.py   (Python constants module)
+#   - lua/gen/registers_gen.lua       (Lua header block for sequencer.lua)
+#
+# NEVER hardcode a numeric Modbus address in logic code (Python or Lua).
+# If you change a slot here, re-run codegen (`tbctl codegen`) and bump
+# interp_version if the Lua-visible interface changed.
+# =============================================================================
+
+meta:
+  # Version of the host<->Lua register interface + interpreter logic.
+  # Python refuses to talk to a Lua interpreter reporting a different version.
+  interp_version: 1
+
+# ---------------------------------------------------------------------------
+# USER_RAM slot allocation.
+# `slot` is a symbolic LJM register name (resolved to a Modbus address by
+# codegen via ljm_constants.json). U16 slots come from USER_RAM#(0:19)_U16,
+# U32 slots from USER_RAM#(0:39)_U32.
+# ---------------------------------------------------------------------------
+slots:
+  host_to_lua:
+    CMD:
+      slot: USER_RAM0_U16
+      desc: "Command word; see enums.cmd. Lua consumes and resets to NOP."
+    ARM_CODE:
+      slot: USER_RAM1_U16
+      desc: "Must equal constants.arm_magic for ARM to be accepted."
+    HEARTBEAT:
+      slot: USER_RAM2_U16
+      desc: "Host increments at >=10 Hz while armed/running; wraps at 2^16."
+    HB_TIMEOUT_MS:
+      slot: USER_RAM3_U16
+      desc: "Heartbeat staleness threshold in ms (default constants.default_hb_timeout_ms)."
+
+  lua_to_host:
+    STATE:
+      slot: USER_RAM4_U16
+      desc: "Sequencer state; see enums.state."
+    STEP_COUNT:
+      slot: USER_RAM5_U16
+      desc: "Parsed step count ((n_steps << 8) | n_abort_steps) after LOAD."
+    CRC16:
+      slot: USER_RAM6_U16
+      desc: "CRC-16/CCITT-FALSE recomputed by Lua over the parsed table."
+    CUR_STEP:
+      slot: USER_RAM7_U16
+      desc: "1-based index of the next step to apply (main or abort table)."
+    ERROR_CODE:
+      slot: USER_RAM8_U16
+      desc: "See enums.error."
+    INTERP_VERSION:
+      slot: USER_RAM9_U16
+      desc: "Published by Lua at startup; host refuses mismatch."
+    ELAPSED_MS:
+      slot: USER_RAM0_U32
+      desc: "ms since FIRE (or since abort start while ABORTING)."
+
+# ---------------------------------------------------------------------------
+# FIFO used for host -> Lua step-table upload (§5 wire format).
+# ---------------------------------------------------------------------------
+fifo:
+  table_upload:
+    index: 0
+    # Data pushed/popped as u16 words, little-endian byte order within each
+    # field per §5 (u32 fields are pushed as two u16 words, low word first).
+    data_register: USER_RAM_FIFO0_DATA_U16
+    allocate_register: USER_RAM_FIFO0_ALLOCATE_NUM_BYTES
+    bytes_in_fifo_register: USER_RAM_FIFO0_NUM_BYTES_IN_FIFO
+    empty_register: USER_RAM_FIFO0_EMPTY
+    allocate_bytes: 2048   # max table: 10B header + 256*6B steps + 2B CRC = 1548 B
+
+# ---------------------------------------------------------------------------
+# Shared enums (identical numeric values in Python and Lua).
+# ---------------------------------------------------------------------------
+enums:
+  cmd:
+    NOP: 0
+    LOAD: 1
+    ARM: 2
+    FIRE: 3
+    ABORT: 4
+    RESET: 5
+  state:
+    IDLE: 0
+    LOADED: 1
+    ARMED: 2
+    RUNNING: 3
+    DONE: 4
+    ABORTING: 5
+    ABORTED: 6
+    FAULT: 7
+  error:
+    NONE: 0
+    HB_TIMEOUT: 1
+    HOST_ABORT: 2
+    BAD_TABLE: 3
+    SPARK_GUARD: 4
+    OVERRUN: 5
+
+# ---------------------------------------------------------------------------
+# Shared constants.
+# ---------------------------------------------------------------------------
+constants:
+  arm_magic: 0xA55A
+  default_hb_timeout_ms: 500
+  default_spark_guard_ms: 2000
+  tick_ms: 1               # Lua LJ.IntervalConfig period
+  max_steps: 128           # per table (main and abort each)
+  min_step_spacing_ms: 2
+  step_bytes: 6            # t_ms u32 + dio_word u16
+  header_bytes: 10
+  trailer_bytes: 2

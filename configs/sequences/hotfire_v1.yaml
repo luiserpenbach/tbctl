@@ -1,0 +1,21 @@
+# 5 s hot fire, N2 pre/post purge (spec §4.2 example).
+name: hotfire_v1
+description: 5 s hot fire, N2 pre/post purge
+max_duration_s: 15.0
+preconditions:
+  - {tag: pressure.n2_purge, min: 8.0}
+steps:
+  - {t: 0.000, set: {valve.purge: open}}
+  - {t: 2.000, set: {valve.purge: close}}
+  - {t: 2.500, set: {spark.igniter: on}}
+  - {t: 2.550, set: {valve.ox_main: open}}
+  - {t: 2.600, set: {valve.fuel_main: open}}
+  - {t: 2.800, set: {spark.igniter: off}}
+  - {t: 7.600, set: {valve.fuel_main: close}}
+  - {t: 7.650, set: {valve.ox_main: close}}
+  - {t: 7.900, set: {valve.purge: open}}
+  - {t: 10.900, set: {valve.purge: close}}
+abort:
+  - {t: 0.000, set: {valve.fuel_main: close, valve.ox_main: close, spark.igniter: off}}
+  - {t: 0.100, set: {valve.purge: open}}
+  - {t: 5.100, set: {valve.purge: close}}

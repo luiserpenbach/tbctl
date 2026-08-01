@@ -1,0 +1,113 @@
+# Example channel map for the GH2/GOX thruster bench (spec §4.1).
+device:
+  ip: 192.168.10.20
+  watchdog_timeout_s: 5
+
+rate_groups:
+  default: {rate_hz: 50}
+  fast:    {rate_hz: 1000}   # reserved for future 1 kHz chamber PT
+
+channels:
+  # ---- pressures (0-5 V transducers, engineering units via polynomial) ----
+  - tag: pressure.chamber
+    hw: AIN0
+    kind: analog_in
+    unit: bar
+    range: 10.0
+    cal: {kind: polynomial, coeffs: [0.0, 25.0]}
+    rate_group: default
+  - tag: pressure.ox_manifold
+    hw: AIN1
+    kind: analog_in
+    unit: bar
+    range: 10.0
+    cal: {kind: polynomial, coeffs: [0.0, 25.0]}
+    rate_group: default
+  - tag: pressure.fuel_manifold
+    hw: AIN2
+    kind: analog_in
+    unit: bar
+    range: 10.0
+    cal: {kind: polynomial, coeffs: [0.0, 25.0]}
+    rate_group: default
+  - tag: pressure.n2_purge
+    hw: AIN3
+    kind: analog_in
+    unit: bar
+    range: 10.0
+    cal: {kind: linear, gain: 40.0, offset: -0.5}
+    rate_group: default
+  - tag: pressure.ox_tank
+    hw: AIN4
+    kind: analog_in
+    unit: bar
+    range: 10.0
+    cal: {kind: polynomial, coeffs: [0.0, 60.0]}
+    rate_group: default
+  - tag: pressure.fuel_tank
+    hw: AIN5
+    kind: analog_in
+    unit: bar
+    range: 10.0
+    cal: {kind: polynomial, coeffs: [0.0, 60.0]}
+    rate_group: default
+
+  # ---- temperatures ----
+  - tag: temp.injector
+    hw: AIN48          # Mux80 extended channel
+    kind: thermocouple_k
+    unit: degC
+    rate_group: default
+  - tag: temp.chamber_wall
+    hw: AIN49
+    kind: thermocouple_k
+    unit: degC
+    rate_group: default
+
+  # ---- load ----
+  - tag: force.thrust
+    hw: AIN6
+    kind: analog_in
+    unit: N
+    range: 0.1
+    cal: {kind: linear, gain: 5000.0, offset: 0.0}
+    rate_group: default
+
+  # ---- valves (driver board on DIO; energized = open unless noted) ----
+  - tag: valve.ox_main
+    hw: FIO0
+    kind: valve
+    fail_safe: closed
+    open_state: high
+  - tag: valve.fuel_main
+    hw: FIO1
+    kind: valve
+    fail_safe: closed
+    open_state: high
+  - tag: valve.ox_vent
+    hw: FIO2
+    kind: valve
+    fail_safe: open      # NC vent: de-energized = open = safe
+    open_state: low
+  - tag: valve.fuel_vent
+    hw: FIO3
+    kind: valve
+    fail_safe: open
+    open_state: low
+  - tag: valve.purge
+    hw: FIO4
+    kind: valve
+    fail_safe: closed
+    open_state: high
+  - tag: valve.ox_pre
+    hw: FIO5
+    kind: valve
+    fail_safe: closed
+    open_state: high
+
+  # ---- igniter ----
+  - tag: spark.igniter
+    hw: FIO6
+    kind: spark
+    fail_safe: off
+    max_on_ms: 2000      # D9 guard, compiled into upload header

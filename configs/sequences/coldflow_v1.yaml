@@ -1,0 +1,18 @@
+# 3 s ox-side cold flow with N2 pre/post purge.
+name: coldflow_v1
+description: Ox-side cold flow, 3 s, N2 purge before and after
+max_duration_s: 12.0
+preconditions:
+  - {tag: pressure.n2_purge, min: 8.0}
+  - {tag: pressure.ox_tank, min: 5.0}
+steps:
+  - {t: 0.000, set: {valve.purge: open}}
+  - {t: 1.500, set: {valve.purge: close}}
+  - {t: 2.000, set: {valve.ox_main: open}}
+  - {t: 5.000, set: {valve.ox_main: close}}
+  - {t: 5.200, set: {valve.purge: open}}
+  - {t: 8.200, set: {valve.purge: close}}
+abort:
+  - {t: 0.000, set: {valve.ox_main: close}}
+  - {t: 0.100, set: {valve.purge: open}}
+  - {t: 3.100, set: {valve.purge: close}}
