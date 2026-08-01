@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import type { ChannelInfo, DashboardConfig, NodeStatus, SeqStatusMsg } from "./types";
+import type { ChannelInfo, DashboardConfig, NodeStatus, RunMeta, SeqStatusMsg } from "./types";
+
+export type ViewMode = { mode: "live" } | { mode: "run"; run: RunMeta };
 
 interface TbctlStore {
   status: NodeStatus | null;
@@ -11,7 +13,11 @@ interface TbctlStore {
   dashboards: string[];
   editMode: boolean;
   sidebarOpen: boolean;
+  runs: RunMeta[];
+  viewMode: ViewMode;
 
+  setRuns: (r: RunMeta[]) => void;
+  setViewMode: (v: ViewMode) => void;
   setStatus: (s: NodeStatus) => void;
   setChannels: (c: ChannelInfo[]) => void;
   setSeqStatus: (s: SeqStatusMsg) => void;
@@ -34,7 +40,11 @@ export const useStore = create<TbctlStore>((set) => ({
   dashboards: [],
   editMode: false,
   sidebarOpen: true,
+  runs: [],
+  viewMode: { mode: "live" },
 
+  setRuns: (runs) => set({ runs }),
+  setViewMode: (viewMode) => set({ viewMode }),
   setStatus: (status) => set({ status }),
   setChannels: (channels) => set({ channels }),
   setSeqStatus: (seqStatus) => set({ seqStatus, lastSeqStatusAt: Date.now() }),

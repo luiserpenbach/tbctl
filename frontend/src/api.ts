@@ -1,4 +1,4 @@
-import type { ChannelInfo, DashboardConfig, NodeStatus } from "./types";
+import type { ChannelInfo, DashboardConfig, NodeStatus, RunMeta } from "./types";
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -33,3 +33,14 @@ export const fetchLive = (tags: string[], windowS: number, maxPoints = 2000) =>
   get<{ window_s: number; series: Record<string, LiveSeries> }>(
     `/api/live?tags=${tags.join(",")}&window_s=${windowS}&max_points=${maxPoints}`,
   );
+
+export const fetchRuns = () => get<{ runs: RunMeta[] }>("/api/runs");
+export const fetchRunData = (runId: string, tags: string[], maxPoints = 2000) =>
+  get<{ run_id: string; series: Record<string, LiveSeries> }>(
+    `/api/runs/${runId}/data?tags=${tags.join(",")}&max_points=${maxPoints}`,
+  );
+export const startRun = (name: string, operator: string, notes: string) =>
+  post<RunMeta>("/api/runs/start", { name, operator, notes });
+export const stopRun = () => post<RunMeta>("/api/runs/stop");
+export const saveDashboard = (name: string, body: DashboardConfig) =>
+  post<{ ok: boolean; path: string }>(`/api/dashboards/${name}`, body);

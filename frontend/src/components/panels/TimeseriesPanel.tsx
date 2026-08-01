@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
-import { fetchLive } from "../../api";
+import { fetchLive, fetchRunData } from "../../api";
 import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
@@ -28,11 +28,13 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
   const channels = useStore((s) => s.channels);
+  const viewMode = useStore((s) => s.viewMode);
   const tags = panel.channels;
+  const isHistory = viewMode.mode === "run";
 
-  // one-time backfill of the ring-buffer window
+  // one-time backfill of the ring-buffer window (live mode)
   useEffect(() => {
-    if (!tags.length) return;
+    if (!tags.length || isHistory) return;
     fetchLive(tags, 300, 2000)
       .then((r) => {
         for (const tag of tags) {
@@ -41,7 +43,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         }
       })
       .catch(() => {});
-  }, [tags]);
+  }, [tags, isHistory]);
 
   useEffect(() => {
     const el = elRef.current;
@@ -104,16 +106,36 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     });
     ro.observe(el);
 
-    const off = onTick(() => {
-      const data = buffers.aligned(tags);
-      // apply series visibility
-      tags.forEach((tag, i) => plot.setSeries(i + 1, { show: !hiddenRef.current.has(tag) }));
-      plot.setData(data, false);
-      const latest = buffers.latestTime();
-      if (followRef.current && latest !== null) {
-        plot.setScale("x", { min: latest - DEFAULT_WINDOW_S, max: latest });
-      }
-    });
+    let off = () => {};
+    if (isHistory && viewMode.mode === "run") {
+      // historical: fetch the run's data once and frame the whole run
+      fetchRunData(viewMode.run.run_id, tags, 4000)
+        .then((r) => {
+          const present = tags.filter((tag) => r.series[tag]?.t.length);
+          if (!present.length) return;
+          const joined = uPlot.join(
+            present.map((tag) => [r.series[tag].t, r.series[tag].mean] as uPlot.AlignedData),
+          );
+          const data: (number | null | undefined)[][] = [joined[0] as number[]];
+          let j = 1;
+          for (const tag of tags) {
+            data.push(present.includes(tag) ? (joined[j++] as number[]) : []);
+          }
+          plot.setData(data as uPlot.AlignedData);
+        })
+        .catch(() => {});
+    } else {
+      off = onTick(() => {
+        const data = buffers.aligned(tags);
+        // apply series visibility
+        tags.forEach((tag, i) => plot.setSeries(i + 1, { show: !hiddenRef.current.has(tag) }));
+        plot.setData(data, false);
+        const latest = buffers.latestTime();
+        if (followRef.current && latest !== null) {
+          plot.setScale("x", { min: latest - DEFAULT_WINDOW_S, max: latest });
+        }
+      });
+    }
 
     return () => {
       off();
@@ -122,7 +144,14 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       plotRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tags.join("|"), panel.y_axis.mode, panel.y_axis.min, panel.y_axis.max]);
+  }, [
+    tags.join("|"),
+    panel.y_axis.mode,
+    panel.y_axis.min,
+    panel.y_axis.max,
+    isHistory,
+    viewMode.mode === "run" ? viewMode.run.run_id : "",
+  ]);
 
   const toggleTag = (tag: string) =>
     setHidden((s) => {
@@ -150,7 +179,12 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         ))}
       </div>
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        {!follow && (
+        {isHistory && viewMode.mode === "run" && (
+          <span className="chip" style={{ position: "absolute", top: 4, left: 6, zIndex: 5 }}>
+            {viewMode.run.run_id}
+          </span>
+        )}
+        {!follow && !isHistory && (
           <button
             className="btn follow-btn"
             onClick={() => {

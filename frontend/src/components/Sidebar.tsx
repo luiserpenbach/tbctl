@@ -1,15 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
+import { fetchRuns } from "../api";
 import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
 
 export function Sidebar() {
   const channels = useStore((s) => s.channels);
   const status = useStore((s) => s.status);
+  const runs = useStore((s) => s.runs);
+  const setRuns = useStore((s) => s.setRuns);
+  const viewMode = useStore((s) => s.viewMode);
+  const setViewMode = useStore((s) => s.setViewMode);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
 
   useEffect(() => onTick(() => setTick((t) => t + 1)), []);
+  useEffect(() => {
+    fetchRuns()
+      .then((r) => setRuns(r.runs))
+      .catch(() => {});
+  }, [setRuns]);
 
   const groups = useMemo(() => {
     const q = query.toLowerCase();
@@ -40,6 +50,30 @@ export function Sidebar() {
         onChange={(e) => setQuery(e.target.value)}
       />
       <div className="tree">
+        <div className="group-header">runs ({runs.length})</div>
+        <div
+          className="chan"
+          style={{ cursor: "pointer" }}
+          onClick={() => setViewMode({ mode: "live" })}
+        >
+          <span style={{ color: viewMode.mode === "live" ? "var(--accent)" : undefined }}>
+            ▶ live
+          </span>
+        </div>
+        {runs.slice(0, 20).map((r) => {
+          const active = viewMode.mode === "run" && viewMode.run.run_id === r.run_id;
+          return (
+            <div
+              key={r.run_id}
+              className="chan"
+              style={{ cursor: "pointer" }}
+              title={`${r.operator} — ${r.notes}`}
+              onClick={() => setViewMode({ mode: "run", run: r })}
+            >
+              <span style={{ color: active ? "var(--accent)" : undefined }}>{r.run_id}</span>
+            </div>
+          );
+        })}
         {groups.map(([ns, chans]) => (
           <div key={ns}>
             <div className="group-header" onClick={() => toggle(ns)}>

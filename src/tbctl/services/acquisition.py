@@ -171,6 +171,12 @@ class AcquisitionService:
         self._tag_group = {c.tag: c.rate_group for c in inputs}
         self._cj_degc = 25.0
         self._cj_read_at = 0.0
+        # listeners get (group_name, t_epoch, eu_block) after every ingest
+        self._listeners: list[Callable[[str, np.ndarray, np.ndarray], None]] = []
+
+    def add_listener(self, fn: Callable[[str, np.ndarray, np.ndarray], None]) -> Callable[[], None]:
+        self._listeners.append(fn)
+        return lambda: self._listeners.remove(fn)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -232,7 +238,14 @@ class AcquisitionService:
             decim = self._group_decim[group]
             mask = idx % decim == 0
             if mask.any():
-                ring.append(t[mask], eu[np.ix_(mask, self._group_cols[group])])
+                gt = t[mask]
+                gv = eu[np.ix_(mask, self._group_cols[group])]
+                ring.append(gt, gv)
+                for fn in self._listeners:
+                    try:
+                        fn(group, gt, gv)
+                    except Exception:
+                        log.exception("acquisition listener failed")
         self._samples_in += n
 
     # -- queries -----------------------------------------------------------

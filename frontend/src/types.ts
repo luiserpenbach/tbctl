@@ -22,7 +22,7 @@ export interface NodeStatus {
     interp_version: number;
   };
   acquisition: { running: boolean; scan_rate_hz: number; sample_count: number };
-  recording: { active: boolean; run_id: string | null };
+  recording: { active: boolean; run_id: string | null; t_start: number | null };
   control_enabled: boolean;
   outputs: Record<string, string>;
   config: Record<string, unknown>;
@@ -67,6 +67,17 @@ export interface PanelConfig {
   h: number;
   channels: string[];
   y_axis: { mode: "auto" | "manual"; min: number | null; max: number | null };
+}
+
+export interface RunMeta {
+  run_id: string;
+  name: string;
+  operator: string;
+  notes: string;
+  t_start: number;
+  t_stop: number | null;
+  sample_counts: Record<string, number>;
+  size_bytes?: number;
 }
 
 export interface DashboardConfig {

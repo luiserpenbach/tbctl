@@ -21,6 +21,12 @@ class SimSet(BaseModel):
     noise_sigma: float | None = None
 
 
+class RunStart(BaseModel):
+    name: str
+    operator: str
+    notes: str = ""
+
+
 def build_router(ctx: NodeContext) -> APIRouter:
     r = APIRouter(prefix="/api")
 
@@ -67,7 +73,11 @@ def build_router(ctx: NodeContext) -> APIRouter:
                 "scan_rate_hz": ctx.acq.scan_rate_hz,
                 "sample_count": ctx.acq.sample_count,
             },
-            "recording": {"active": False, "run_id": None},
+            "recording": {
+                "active": ctx.recorder.active is not None,
+                "run_id": ctx.recorder.active.run_id if ctx.recorder.active else None,
+                "t_start": ctx.recorder.active.t_start if ctx.recorder.active else None,
+            },
             "control_enabled": ctx.control_enabled,
             "outputs": valve_states,
             "config": {
@@ -112,6 +122,64 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(404, str(e)) from e
         return {"window_s": window_s, "series": data}
 
+    # ------------------------------------------------------------- runs
+
+    @r.post("/runs/start")
+    async def runs_start(body: RunStart) -> dict:
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            run = await ctx.recorder.start_run(body.name, body.operator, body.notes)
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+        ctx.events.log("run_started", run_id=run.run_id, name=run.name, operator=run.operator)
+        return run.to_dict()
+
+    @r.post("/runs/stop")
+    async def runs_stop() -> dict:
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            run = await ctx.recorder.stop_run()
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+        ctx.events.log("run_stopped", run_id=run.run_id, sample_counts=run.sample_counts)
+        return run.to_dict()
+
+    @r.get("/runs")
+    def runs_list() -> dict:
+        return {"runs": ctx.recorder.list_runs()}
+
+    @r.get("/runs/{run_id}")
+    def run_meta(run_id: str) -> dict:
+        try:
+            return ctx.recorder.run_meta(run_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+
+    @r.get("/runs/{run_id}/data")
+    def run_data(
+        run_id: str,
+        tags: str,
+        t0: float | None = None,
+        t1: float | None = None,
+        max_points: Annotated[int, Query(gt=1, le=20000)] = 2000,
+    ) -> dict:
+        from tbctl.services.recorder import RecorderError
+
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if not tag_list:
+            raise HTTPException(400, "no tags given")
+        try:
+            series = ctx.recorder.run_data(run_id, tag_list, t0, t1, max_points)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+        return {"run_id": run_id, "series": series}
+
+    # -------------------------------------------------------- dashboards
+
     @r.get("/dashboards")
     def dashboards() -> dict:
         return {"dashboards": sorted(ctx.bundle.dashboards.keys())}
@@ -121,6 +189,30 @@ def build_router(ctx: NodeContext) -> APIRouter:
         if name not in ctx.bundle.dashboards:
             raise HTTPException(404, f"unknown dashboard {name!r}")
         return ctx.bundle.dashboards[name].model.model_dump()
+
+    @r.post("/dashboards/{name}")
+    def dashboard_save(name: str, body: dict) -> dict:
+        """Edit-mode save: validate and write back as YAML (§4.3)."""
+        import re as _re
+
+        import yaml
+
+        from tbctl.config.loader import load_dashboard
+        from tbctl.config.models import Dashboard
+
+        if not _re.match(r"^[a-zA-Z0-9_\-]+$", name):
+            raise HTTPException(400, "bad dashboard name")
+        body["name"] = name
+        try:
+            model = Dashboard.model_validate(body)
+        except Exception as e:
+            raise HTTPException(422, str(e)) from e
+        path = ctx.config_dir / "dashboards" / f"{name}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(model.model_dump(), sort_keys=False))
+        ctx.bundle.dashboards[name] = load_dashboard(path)
+        ctx.events.log("dashboard_saved", name=name)
+        return {"ok": True, "path": str(path)}
 
     if ctx.sim:
 

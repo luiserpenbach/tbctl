@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { saveDashboard } from "../api";
 import { useStore } from "../store";
 
 export function StatusBar() {
@@ -40,6 +41,18 @@ export function StatusBar() {
       <span className={`chip ${recording ? "rec" : ""}`}>
         <span className="dot" />{recording ? "REC" : "IDLE"}
       </span>
+      {editMode && dashboard && (
+        <button
+          className="btn"
+          onClick={() =>
+            saveDashboard(dashboard.name, dashboard)
+              .then(() => setEditMode(false))
+              .catch((e) => alert(String(e)))
+          }
+        >
+          save
+        </button>
+      )}
       <button
         className={`btn ${editMode ? "active" : ""}`}
         onClick={() => setEditMode(!editMode)}
