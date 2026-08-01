@@ -54,6 +54,52 @@ def cmd_codegen(args: argparse.Namespace) -> int:
     return codegen.generate(check=args.check)
 
 
+def cmd_probe(args: argparse.Namespace) -> int:
+    """Minimal connectivity check: find the T7, print identity, check the script."""
+    from tbctl.config.loader import load_channels
+    from tbctl.hw.ljm_iface import LjmDevice
+    from tbctl.hw.registers_gen import INTERP_VERSION, REG_NAME
+
+    chmap = load_channels(Path(args.config_dir) / "channels.yaml").model
+    conn, ident = ("USB", "ANY") if args.usb else chmap.device.ljm_open_args()
+    if args.ip:
+        conn, ident = "ETHERNET", args.ip
+    print(f"opening T7 via {conn} ({ident})…")
+    dev = LjmDevice(ident, conn)
+    try:
+        dev.open()
+    except Exception as e:
+        print(f"FAILED to open device: {e}", file=sys.stderr)
+        print(
+            "hints: is Kipling (or another process) holding the device? "
+            "is the LJM library installed? try: python -c "
+            "\"from labjack import ljm; print(ljm.listAllS('T7','ANY'))\"",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        serial = int(dev.read_name("SERIAL_NUMBER"))
+        fw = dev.read_name("FIRMWARE_VERSION")
+        temp_k = dev.read_name("TEMPERATURE_DEVICE_K")
+        print(
+            f"connected: T7 serial {serial}, firmware {fw:.4f}, device temp {temp_k - 273.15:.1f} degC"
+        )
+        ain0 = dev.read_name("AIN0")
+        print(f"AIN0 reads {ain0:.4f} V")
+        v = int(dev.read_name(REG_NAME["INTERP_VERSION"]))
+        if v == INTERP_VERSION:
+            print(f"sequencer.lua is running (interp_version {v}) — ready")
+        elif v == 0:
+            print("sequencer.lua NOT running — run `tbctl deploy-lua` before sequencing")
+        else:
+            print(
+                f"WARNING: script reports interp_version {v}, host expects {INTERP_VERSION} — redeploy"
+            )
+        return 0
+    finally:
+        dev.close()
+
+
 def cmd_deploy_lua(args: argparse.Namespace) -> int:
     from tbctl.config.loader import load_channels
     from tbctl.hw.ljm_iface import LjmDevice
@@ -99,6 +145,12 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="verify outputs are in sync, don't write"
     )
     p_gen.set_defaults(func=cmd_codegen)
+
+    p_probe = sub.add_parser("probe", help="check T7 connectivity and script status")
+    p_probe.add_argument("--config-dir", default="configs")
+    p_probe.add_argument("--ip", default=None, help="override: connect via Ethernet to this IP")
+    p_probe.add_argument("--usb", action="store_true", help="override: connect via USB")
+    p_probe.set_defaults(func=cmd_probe)
 
     p_dep = sub.add_parser(
         "deploy-lua", help="upload lua/sequencer.lua to the T7 and arm the hardware watchdog"
