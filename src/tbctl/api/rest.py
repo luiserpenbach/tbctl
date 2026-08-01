@@ -112,6 +112,16 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(404, str(e)) from e
         return {"window_s": window_s, "series": data}
 
+    @r.get("/dashboards")
+    def dashboards() -> dict:
+        return {"dashboards": sorted(ctx.bundle.dashboards.keys())}
+
+    @r.get("/dashboards/{name}")
+    def dashboard(name: str) -> dict:
+        if name not in ctx.bundle.dashboards:
+            raise HTTPException(404, f"unknown dashboard {name!r}")
+        return ctx.bundle.dashboards[name].model.model_dump()
+
     if ctx.sim:
 
         @r.post("/sim/set")
