@@ -40,6 +40,22 @@ def test_minimal_valid_map():
     assert m.by_tag("valve.ox_main").hw == "FIO0"
 
 
+def test_device_connection_modes():
+    m = chmap([AIN])
+    assert m.device.connection == "ethernet"
+    assert m.device.ljm_open_args() == ("ETHERNET", "192.168.10.20")
+    usb = ChannelMap.model_validate(
+        {
+            "device": {**DEVICE, "connection": "usb"},
+            "rate_groups": RATE_GROUPS,
+            "channels": [AIN],
+        }
+    )
+    assert usb.device.ljm_open_args() == ("USB", "ANY")
+    with pytest.raises(ValidationError):
+        chmap([AIN], device={**DEVICE, "connection": "wifi"})
+
+
 def test_dio_numbering():
     assert dio_number("FIO0") == 0
     assert dio_number("FIO7") == 7

@@ -67,8 +67,9 @@ class LjmDevice:
     the package is importable (and the simulator usable) without the LJM
     shared library installed."""
 
-    def __init__(self, ip: str):
-        self._ip = ip
+    def __init__(self, identifier: str, connection: str = "ETHERNET"):
+        self._identifier = identifier
+        self._connection = connection
         self._handle: int | None = None
         self._ljm = None
         self._scan_names: list[str] = []
@@ -78,7 +79,7 @@ class LjmDevice:
         from labjack import ljm  # deferred: needs LJM shared library
 
         self._ljm = ljm
-        self._handle = ljm.openS("T7", "ETHERNET", self._ip)
+        self._handle = ljm.openS("T7", self._connection, self._identifier)
 
     def close(self) -> None:
         if self._handle is not None:

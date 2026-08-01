@@ -57,7 +57,16 @@ class StrictModel(BaseModel):
 
 class DeviceConfig(StrictModel):
     ip: str
+    # How LJM reaches the T7. "ethernet" (production: cabinet LAN via `ip`),
+    # "usb" (bench/laptop testing, ignores `ip`), or "any" (first T7 found).
+    connection: Literal["ethernet", "usb", "any"] = "ethernet"
     watchdog_timeout_s: int = Field(ge=1, le=60)
+
+    def ljm_open_args(self) -> tuple[str, str]:
+        """(connection_type, identifier) for LJM openS."""
+        if self.connection == "ethernet":
+            return "ETHERNET", self.ip
+        return self.connection.upper(), "ANY"
 
     @field_validator("ip")
     @classmethod

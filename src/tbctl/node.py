@@ -72,7 +72,8 @@ def build_context(
     else:
         from tbctl.hw.ljm_iface import LjmDevice
 
-        iface = LjmDevice(chmap.device.ip)
+        conn, ident = chmap.device.ljm_open_args()
+        iface = LjmDevice(ident, conn)
     acq = AcquisitionService(chmap, iface)
     data_dir = data_dir or Path("data/runs")
     events = EventLog(log_dir or Path("logs"))

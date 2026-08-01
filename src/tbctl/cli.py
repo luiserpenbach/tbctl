@@ -61,9 +61,14 @@ def cmd_deploy_lua(args: argparse.Namespace) -> int:
     from tbctl.hw.watchdog import configure_watchdog
 
     chmap = load_channels(Path(args.config_dir) / "channels.yaml").model
-    ip = args.ip or chmap.device.ip
-    dev = LjmDevice(ip)
-    print(f"connecting to T7 at {ip}…")
+    if args.usb:
+        conn, ident = "USB", "ANY"
+    else:
+        conn, ident = chmap.device.ljm_open_args()
+    if args.ip:
+        conn, ident = "ETHERNET", args.ip
+    dev = LjmDevice(ident, conn)
+    print(f"connecting to T7 via {conn} ({ident})…")
     dev.open()
     try:
         version = deploy_script(dev, save_to_flash=not args.no_flash)
@@ -100,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_dep.add_argument("--config-dir", default="configs")
     p_dep.add_argument("--ip", default=None, help="override device IP from channels.yaml")
+    p_dep.add_argument("--usb", action="store_true", help="connect over USB instead of Ethernet")
     p_dep.add_argument(
         "--no-flash", action="store_true", help="don't persist the script across power cycles"
     )

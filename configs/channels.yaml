@@ -1,6 +1,7 @@
 # Example channel map for the GH2/GOX thruster bench (spec §4.1).
 device:
   ip: 192.168.10.20
+  connection: ethernet   # "usb" for laptop bench testing (ip then ignored)
   watchdog_timeout_s: 5
 
 rate_groups:
