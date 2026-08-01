@@ -139,6 +139,14 @@ def build_app(ctx: NodeContext) -> FastAPI:
     app.state.hub = hub
     app.include_router(rest.build_router(ctx))
     app.include_router(ws.build_router(ctx, hub))
+
+    # serve the built frontend (frontend/dist) when present, so the Pi needs
+    # no separate web server — the browser just hits http://<pi>:8000/
+    dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    if dist.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     return app
 
 
@@ -149,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--log-level", default="info")
+    parser.add_argument("--data-dir", default="data/runs", help="run HDF5 directory (USB SSD)")
+    parser.add_argument("--log-dir", default="logs", help="event JSONL directory")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -156,7 +166,12 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
-        ctx = build_context(Path(args.config_dir), args.sim)
+        ctx = build_context(
+            Path(args.config_dir),
+            args.sim,
+            data_dir=Path(args.data_dir),
+            log_dir=Path(args.log_dir),
+        )
     except ConfigError as e:
         print(f"config invalid:\n{e}", file=sys.stderr)
         return 1

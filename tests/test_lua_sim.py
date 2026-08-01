@@ -185,7 +185,7 @@ def test_spark_guard_trips(rig):
 
 
 def test_truncated_upload_faults(rig):
-    mock, clock, chmap = rig
+    mock, _clock, chmap = rig
     words = table(chmap).to_u16_words()
     mock.write_name_array(REG_NAME["FIFO_DATA"], words[:-3])  # truncated
     mock.write_name(REG_NAME["CMD"], Cmd.LOAD)
@@ -196,7 +196,7 @@ def test_truncated_upload_faults(rig):
 
 
 def test_corrupted_crc_faults(rig):
-    mock, clock, chmap = rig
+    mock, _clock, chmap = rig
     words = table(chmap).to_u16_words()
     words[8] ^= 0x0004  # flip a bit in a step
     mock.write_name_array(REG_NAME["FIFO_DATA"], words)
@@ -206,7 +206,7 @@ def test_corrupted_crc_faults(rig):
 
 
 def test_wrong_arm_code_rejected(rig):
-    mock, clock, chmap = rig
+    mock, _clock, chmap = rig
     upload_and_load(mock, table(chmap))
     mock.write_name(REG_NAME["ARM_CODE"], 0x1234)
     mock.write_name(REG_NAME["CMD"], Cmd.ARM)
@@ -227,7 +227,7 @@ def test_abort_while_armed_goes_safe(rig):
 
 
 def test_load_rejected_while_not_idle(rig):
-    mock, clock, chmap = rig
+    mock, _clock, chmap = rig
     upload_and_load(mock, table(chmap))
     assert state(mock) == SeqState.LOADED
     # a second LOAD without RESET is ignored (fifo drains only on LOAD in IDLE)

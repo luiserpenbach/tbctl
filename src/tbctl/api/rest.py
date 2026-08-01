@@ -1,5 +1,6 @@
-"""REST endpoints (spec §7). M2 scope: status, channels, live. Control,
-runs and dashboards land with their services (M4/M5)."""
+"""REST endpoints (spec §7): status, channels, live data, sequencer control,
+manual valves, control mode, runs, dashboards. All control is REST — never
+WebSocket (D6)."""
 
 from __future__ import annotations
 

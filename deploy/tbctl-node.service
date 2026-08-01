@@ -1,0 +1,30 @@
+# systemd unit for the tbctl node on the cabinet Pi.
+# Install:
+#   sudo cp deploy/tbctl-node.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tbctl-node
+# Simulator/training mode: add --sim to ExecStart (or use a drop-in).
+
+[Unit]
+Description=tbctl testbench control node
+After=network-online.target data-tbctl.mount
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tbctl
+Group=tbctl
+WorkingDirectory=/opt/tbctl
+ExecStart=/opt/tbctl/.venv/bin/tbctl-node \
+    --config-dir /opt/tbctl/configs \
+    --data-dir /data/tbctl/runs \
+    --log-dir /data/tbctl/logs \
+    --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=2
+# the node is the only writer of runs/events; keep the rest read-only
+ProtectSystem=full
+ReadWritePaths=/data/tbctl /opt/tbctl/configs
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

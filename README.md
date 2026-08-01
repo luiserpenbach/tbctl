@@ -41,6 +41,23 @@ configs/                 # channels.yaml, sequences/, dashboards/
 tests/                   # pytest + golden CRC vectors + Lua harness
 ```
 
+## Run the full stack locally (simulator)
+
+```bash
+uv run tbctl-node --sim                      # node + API on :8000
+cd frontend && npm install && npm run dev    # dashboard on :5173 (proxies to :8000)
+```
+
+Or build the frontend once (`npm run build`) and the node serves it itself
+at `http://localhost:8000/`.
+
+## Deployment
+
+See `docs/deployment.md` (fresh Pi → running node in <30 min: static IPs,
+LJM install, USB-SSD data path, `tbctl deploy-lua`, systemd unit) and
+`docs/timing-report.md` (§10.3 hardware acceptance, required before hot
+fires and after any `interp_version` bump).
+
 ## Invariants
 
 - **Never** hardcode Modbus addresses — everything flows from

@@ -305,6 +305,6 @@ async def test_verify_catches_wrong_crc(node):
     ctx.iface.write_name_array = corrupt
     from tbctl.services.sequencer import SequencerError
 
-    with pytest.raises(SequencerError, match="rejected table|verification failed"):
+    with pytest.raises(SequencerError, match=r"rejected table|verification failed"):
         await ctx.sequencer.load("quick")
     ctx.iface.write_name_array = orig
