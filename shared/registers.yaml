@@ -116,5 +116,8 @@ constants:
   max_steps: 128           # per table (main and abort each)
   min_step_spacing_ms: 2
   step_bytes: 6            # t_ms u32 + dio_word u16
-  header_bytes: 10
+  # NOTE: header extended from the original §5 spec (10 B) by spark_mask u16
+  # (12 B total) — the D9 spark guard needs to know which DIO bit is the
+  # spark line, and the mask must live inside the CRC-protected region.
+  header_bytes: 12
   trailer_bytes: 2
