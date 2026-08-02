@@ -438,6 +438,22 @@ class MockDevice:
         for w in values:
             self._fifo += int(w).to_bytes(2, "little")
 
+    def write_name_bytes(self, name: str, data: bytes) -> None:
+        # Real hardware uses this for LUA_SOURCE_WRITE; the mock's Lua is
+        # embedded, so accept and ignore script uploads.
+        self.advance()
+        if name != "LUA_SOURCE_WRITE":
+            raise ValueError(f"byte write only supported for LUA_SOURCE_WRITE, got {name}")
+
+    def read_name_bytes(self, name: str, num_bytes: int) -> bytes:
+        self.advance()
+        if name != "LUA_DEBUG_DATA":
+            raise ValueError(f"byte read only supported for LUA_DEBUG_DATA, got {name}")
+        return b""
+
+    def reboot(self, delay_ticks: int = 40) -> None:
+        return
+
     def fifo_drain(self) -> bytes:
         raw = bytes(self._fifo)
         self._fifo.clear()

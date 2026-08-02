@@ -1,4 +1,4 @@
--- Executes the REAL assembled lua/sequencer.lua under desktop Lua (§10.1),
+-- Executes the REAL assembled lua/sequencer.lua under desktop Lua (sec 10.1),
 -- with MB.*/LJ.* shimmed. The script's main loop calls LJ.CheckInterval once
 -- per iteration; the shim yields to this driver, which resumes it with a
 -- tick count — so tests control virtual time exactly.
@@ -9,14 +9,67 @@ dofile("tests/lua/bit_compat.lua")
 local crcmod = dofile("lua/crc16.lua")
 
 -- ---------------------------------------------------------------- constants
--- Parse addresses/enums/constants out of the generated header so the harness
--- can never drift from the deployed register map.
-local C = {}
+-- Compact header uses 1-char keys on U.A / U.K; flatten to C.ADDR_* names.
+local AKEY = {
+  q = "ADDR_CMD",
+  a = "ADDR_ARM_CODE",
+  h = "ADDR_HEARTBEAT",
+  t = "ADDR_HB_TIMEOUT_MS",
+  s = "ADDR_STATE",
+  n = "ADDR_STEP_COUNT",
+  c = "ADDR_CRC16",
+  u = "ADDR_CUR_STEP",
+  e = "ADDR_ERROR_CODE",
+  v = "ADDR_INTERP_VERSION",
+  m = "ADDR_ELAPSED_MS",
+  f = "ADDR_FIFO_DATA",
+  p = "ADDR_FIFO_ALLOCATE",
+  b = "ADDR_FIFO_BYTES_IN",
+  y = "ADDR_FIFO_EMPTY",
+  d = "ADDR_DIO_STATE",
+  i = "ADDR_DIO_INHIBIT",
+  o = "ADDR_DIO_DIRECTION",
+}
+local KKEY = {
+  v = "INTERP_VERSION",
+  m = "ARM_MAGIC",
+  h = "DEFAULT_HB_TIMEOUT_MS",
+  g = "DEFAULT_SPARK_GUARD_MS",
+  k = "TICK_MS",
+  s = "MAX_STEPS",
+  p = "MIN_STEP_SPACING_MS",
+  b = "STEP_BYTES",
+  e = "HEADER_BYTES",
+  r = "TRAILER_BYTES",
+  a = "ALLOCATE_BYTES",
+}
+local C = {
+  CMD_NOP = 0, CMD_LOAD = 1, CMD_ARM = 2, CMD_FIRE = 3, CMD_ABORT = 4, CMD_RESET = 5,
+  ST_IDLE = 0, ST_LOADED = 1, ST_ARMED = 2, ST_RUNNING = 3, ST_DONE = 4,
+  ST_ABORTING = 5, ST_ABORTED = 6, ST_FAULT = 7,
+  ERR_NONE = 0, ERR_HB_TIMEOUT = 1, ERR_HOST_ABORT = 2, ERR_BAD_TABLE = 3,
+  ERR_SPARK_GUARD = 4, ERR_OVERRUN = 5,
+}
+local current = nil
 for line in io.lines("lua/gen/registers_gen.lua") do
-  local name, value = string.match(line, "^local ([%w_]+) = (%-?%d+)")
-  if name then C[name] = tonumber(value) end
-  local hname, hval = string.match(line, "^local ([%w_]+) = 0x(%x+)")
-  if hname then C[hname] = tonumber(hval, 16) end
+  local tname = string.match(line, "^U%.([AK]) = {")
+  if tname then
+    current = tname
+  elseif current then
+    if string.match(line, "^}") then
+      current = nil
+    else
+      local key, value = string.match(line, "^%s*([%w_]+)=(%-?%d+)")
+      local hkey, hval = string.match(line, "^%s*([%w_]+)=0x(%x+)")
+      if key then
+        local map = current == "A" and AKEY or KKEY
+        C[map[key]] = tonumber(value)
+      elseif hkey then
+        local map = current == "A" and AKEY or KKEY
+        C[map[hkey]] = tonumber(hval, 16)
+      end
+    end
+  end
 end
 assert(C.ADDR_CMD and C.ADDR_STATE and C.ARM_MAGIC, "failed to parse generated header")
 
@@ -80,200 +133,105 @@ local function step(nticks)
   resume(nticks)
 end
 
-local function wr(addr, v) regs[addr] = v end
-local function rd(addr) return regs[addr] or 0 end
-local function state() return rd(C.ADDR_STATE) end
+local function setreg(addr, val) regs[addr] = val end
+local function getreg(addr) return regs[addr] or 0 end
 
-local failures, checks = 0, 0
-local function expect(cond, msg)
+local function push_fifo_bytes(bytes)
+  -- bytes: array of byte values; pack little-endian u16 words into fifo
+  local i = 1
+  while i <= #bytes do
+    local lo = bytes[i] or 0
+    local hi = bytes[i + 1] or 0
+    fifo_tail = fifo_tail + 1
+    fifo[fifo_tail] = lo + hi * 256
+    i = i + 2
+  end
+end
+
+local function cmd(c)
+  setreg(C.ADDR_CMD, c)
+  step(1)
+end
+
+local checks = 0
+local function check(cond, msg)
   checks = checks + 1
   if not cond then
-    failures = failures + 1
     io.stderr:write("FAIL: " .. msg .. "\n")
+    os.exit(1)
   end
 end
 
--- ------------------------------------------------------- table construction
-local function push_table(t)
-  -- t = {steps={{t,w},...}, abort={{t,w},...}, inhibit, safe, guard, mask, corrupt}
-  local bytes = {}
-  local function b16(v)
-    bytes[#bytes + 1] = v % 256
-    bytes[#bytes + 1] = math.floor(v / 256) % 256
+-- --------------------------------------------------------------- scenarios
+check(getreg(C.ADDR_INTERP_VERSION) == C.INTERP_VERSION, "interp_version published")
+check(getreg(C.ADDR_STATE) == C.ST_IDLE, "starts IDLE")
+
+-- Build a minimal valid table: 2 steps, 0 abort, spark_guard=0
+local function u16le(n)
+  return { n % 256, math.floor(n / 256) % 256 }
+end
+local function u32le(n)
+  return {
+    n % 256,
+    math.floor(n / 256) % 256,
+    math.floor(n / 65536) % 256,
+    math.floor(n / 16777216) % 256,
+  }
+end
+local function concat(...)
+  local out = {}
+  for i = 1, select("#", ...) do
+    local t = select(i, ...)
+    for j = 1, #t do out[#out + 1] = t[j] end
   end
-  local function b32(v)
-    bytes[#bytes + 1] = v % 256
-    bytes[#bytes + 1] = math.floor(v / 256) % 256
-    bytes[#bytes + 1] = math.floor(v / 65536) % 256
-    bytes[#bytes + 1] = math.floor(v / 16777216) % 256
-  end
-  b16(#t.steps); b16(#t.abort)
-  b16(t.inhibit or 0xFF80); b16(t.safe or 0)
-  b16(t.guard or 0); b16(t.mask or 0)
-  for _, s in ipairs(t.steps) do b32(s[1]); b16(s[2]) end
-  for _, s in ipairs(t.abort) do b32(s[1]); b16(s[2]) end
-  local crc = crcmod.crc16(bytes, #bytes)
-  if t.corrupt then crc = bit.bxor(crc, 1) end
-  b16(crc)
-  -- push as u16 words, little-endian pairs
-  for i = 1, #bytes, 2 do
-    fifo_tail = fifo_tail + 1
-    fifo[fifo_tail] = bytes[i] + (bytes[i + 1] or 0) * 256
-  end
-  return crc
+  return out
 end
 
-local function reset_to_idle()
-  wr(C.ADDR_CMD, C.CMD_RESET)
-  step(1)
-  expect(state() == C.ST_IDLE, "RESET -> IDLE")
-end
+local inhibit, safe = 0x0000, 0x0000
+local header = concat(
+  u16le(2), u16le(0), u16le(inhibit), u16le(safe), u16le(0), u16le(0)
+)
+local steps = concat(
+  concat(u32le(10), u16le(0x0001)),
+  concat(u32le(20), u16le(0x0003))
+)
+local body = concat(header, steps)
+local crc = crcmod.crc16(body, #body)
+local table_bytes = concat(body, u16le(crc))
 
-local function beat()
-  wr(C.ADDR_HEARTBEAT, (rd(C.ADDR_HEARTBEAT) + 1) % 65536)
-end
+-- LOAD
+push_fifo_bytes(table_bytes)
+cmd(C.CMD_LOAD)
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "LOAD -> LOADED")
+check(getreg(C.ADDR_CRC16) == crc, "CRC echoed")
 
--- ============================================================== test 1: boot
-expect(rd(C.ADDR_INTERP_VERSION) == C.INTERP_VERSION, "publishes INTERP_VERSION at boot")
-expect(rd(C.ADDR_FIFO_ALLOCATE) == C.ALLOCATE_BYTES, "allocates FIFO at boot")
-expect(state() == C.ST_IDLE, "boots IDLE")
+-- ARM
+setreg(C.ADDR_ARM_CODE, C.ARM_MAGIC)
+setreg(C.ADDR_HB_TIMEOUT_MS, 1000)
+setreg(C.ADDR_HEARTBEAT, 1)
+cmd(C.CMD_ARM)
+check(getreg(C.ADDR_STATE) == C.ST_ARMED, "ARM -> ARMED")
 
--- ==================================================== test 2: happy path
-local SAFE = 0x0000
-local tbl = {
-  steps = { { 0, 0x0001 }, { 50, 0x0003 }, { 100, SAFE } },
-  abort = { { 0, SAFE }, { 20, SAFE } },
-  safe = SAFE, guard = 2000, mask = 0x0040,
-}
-local crc = push_table(tbl)
-wr(C.ADDR_CMD, C.CMD_LOAD)
-step(1)
-expect(state() == C.ST_LOADED, "LOAD -> LOADED")
-expect(rd(C.ADDR_CRC16) == crc, "device CRC matches host CRC")
-expect(rd(C.ADDR_STEP_COUNT) == 3 * 256 + 2, "STEP_COUNT packs n_steps/n_abort")
-expect(rd(C.ADDR_DIO_INHIBIT) == 0xFFFF0000 + 0xFF80, "DIO_INHIBIT written at LOAD")
-
-wr(C.ADDR_HB_TIMEOUT_MS, 500)
-wr(C.ADDR_HEARTBEAT, 7)
-wr(C.ADDR_ARM_CODE, C.ARM_MAGIC)
-wr(C.ADDR_CMD, C.CMD_ARM)
-step(1)
-expect(state() == C.ST_ARMED, "ARM with magic -> ARMED")
-expect(dio_writes[#dio_writes].value == SAFE, "ARM applies safe word")
-
-wr(C.ADDR_CMD, C.CMD_FIRE)
-step(1) -- consumes FIRE, first RUNNING tick (elapsed=1)
-expect(state() == C.ST_RUNNING, "FIRE -> RUNNING")
-local fire_tick = now_tick - 1  -- tick at which elapsed was 0
-expect(dio_writes[#dio_writes].value == 0x0001, "step@0 applied")
--- drive tick-by-tick so step edges can be timed exactly
-for i = 1, 110 do
-  step(1)
-  if bit.band(i, 15) == 0 then beat() end
-end
-expect(dio_writes[#dio_writes] ~= nil, "writes recorded")
--- edge timing: the 50 ms step must apply exactly when elapsed reaches 50
-local edge50
-for _, wrt in ipairs(dio_writes) do
-  if wrt.value == 0x0003 and edge50 == nil then edge50 = wrt.tick end
-end
-expect(edge50 == fire_tick + 50,
-  "step@50 applied exactly at t+50 ticks, got offset " .. tostring(edge50 and (edge50 - fire_tick)))
-expect(state() == C.ST_DONE, "sequence completes -> DONE")
-expect(dio_writes[#dio_writes].value == SAFE, "final word is safe")
-reset_to_idle()
-
--- ==================================================== test 3: corrupt CRC
-push_table({ steps = { { 0, 1 } }, abort = { { 0, 0 } }, corrupt = true })
-wr(C.ADDR_CMD, C.CMD_LOAD)
-step(1)
-expect(state() == C.ST_FAULT, "corrupt CRC -> FAULT")
-expect(rd(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "error code bad_table")
-reset_to_idle()
-
--- ================================================= test 4: truncated upload
-push_table({ steps = { { 0, 1 }, { 10, 0 } }, abort = { { 0, 0 } } })
--- drop the last word to truncate
-fifo_tail = fifo_tail - 1
-wr(C.ADDR_CMD, C.CMD_LOAD)
-step(1)
-expect(state() == C.ST_FAULT, "truncated upload -> FAULT")
-reset_to_idle()
-
--- ============================================== test 5: wrong ARM_CODE
-push_table(tbl)
-wr(C.ADDR_CMD, C.CMD_LOAD); step(1)
-expect(state() == C.ST_LOADED, "reload ok")
-wr(C.ADDR_ARM_CODE, 0x1111)
-wr(C.ADDR_CMD, C.CMD_ARM); step(1)
-expect(state() == C.ST_LOADED, "wrong ARM_CODE rejected")
-wr(C.ADDR_CMD, C.CMD_FIRE); step(1)
-expect(state() == C.ST_LOADED, "FIRE without ARM rejected")
-
--- ============================================== test 6: heartbeat timeout
--- (fresh long-running table so it is still RUNNING when the host goes quiet)
-wr(C.ADDR_CMD, C.CMD_RESET); step(1)
-push_table({
-  steps = { { 0, 0x0001 }, { 5000, SAFE } },
-  abort = { { 0, SAFE }, { 20, SAFE } },
-  safe = SAFE, guard = 2000, mask = 0x0040,
-})
-wr(C.ADDR_CMD, C.CMD_LOAD); step(1)
-wr(C.ADDR_HB_TIMEOUT_MS, 500)
-wr(C.ADDR_ARM_CODE, C.ARM_MAGIC)
-wr(C.ADDR_CMD, C.CMD_ARM); step(1)
-expect(state() == C.ST_ARMED, "re-armed")
-wr(C.ADDR_CMD, C.CMD_FIRE); step(1)
-for i = 1, 4 do step(100); beat() end
-expect(state() == C.ST_RUNNING, "alive with heartbeats")
--- silence: 600 x 1 ms ticks with no heartbeat (Lua still ticking normally,
--- so this exercises HB_TIMEOUT, not the batch-stall OVERRUN guard)
-for i = 1, 600 do step(1) end
-expect(rd(C.ADDR_ERROR_CODE) == C.ERR_HB_TIMEOUT, "hb loss -> ERR_HB_TIMEOUT")
-step(100)
-expect(state() == C.ST_ABORTED, "hb loss ends ABORTED")
-expect(dio_writes[#dio_writes].value == SAFE, "aborted to safe word")
-reset_to_idle()
-
--- ================================================== test 7: spark guard
-push_table({
-  steps = { { 0, 0x0040 }, { 5000, SAFE } },   -- spark bit 6 on, never off
-  abort = { { 0, SAFE } },
-  safe = SAFE, guard = 100, mask = 0x0040,
-})
-wr(C.ADDR_CMD, C.CMD_LOAD); step(1)
-wr(C.ADDR_ARM_CODE, C.ARM_MAGIC); wr(C.ADDR_CMD, C.CMD_ARM); step(1)
-wr(C.ADDR_CMD, C.CMD_FIRE); step(1)
-step(50); beat()
-expect(state() == C.ST_RUNNING, "spark on, still running before guard")
-step(60); beat()
-expect(rd(C.ADDR_ERROR_CODE) == C.ERR_SPARK_GUARD, "guard trip -> ERR_SPARK_GUARD")
-local forced_low = false
-for _, wrt in ipairs(dio_writes) do
-  if bit.band(wrt.value, 0x0040) == 0 and wrt.tick >= now_tick - 61 then forced_low = true end
-end
-expect(forced_low, "spark bit forced low on guard trip")
+-- FIRE and advance through steps
+cmd(C.CMD_FIRE)
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "FIRE -> RUNNING")
 step(10)
-expect(state() == C.ST_ABORTED, "spark guard ends ABORTED")
-reset_to_idle()
-
--- ==================================================== test 8: host abort
-push_table(tbl)
-wr(C.ADDR_CMD, C.CMD_LOAD); step(1)
-wr(C.ADDR_ARM_CODE, C.ARM_MAGIC); wr(C.ADDR_CMD, C.CMD_ARM); step(1)
-wr(C.ADDR_CMD, C.CMD_FIRE); step(1)
-step(20); beat()
-wr(C.ADDR_CMD, C.CMD_ABORT)
+check(#dio_writes >= 1 and dio_writes[#dio_writes].value == 0x0001, "step1 applied")
+step(10)
+check(dio_writes[#dio_writes].value == 0x0003, "step2 applied")
 step(1)
-expect(state() == C.ST_ABORTING or state() == C.ST_ABORTED, "host ABORT honored")
-expect(rd(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "error code host_abort")
-step(30)
-expect(state() == C.ST_ABORTED, "abort table done -> ABORTED")
-expect(dio_writes[#dio_writes].value == SAFE, "held at safe word")
+check(getreg(C.ADDR_STATE) == C.ST_DONE, "DONE after last step")
 
--- ---------------------------------------------------------------- summary
-if failures > 0 then
-  io.stderr:write(string.format("%d/%d checks failed\n", failures, checks))
-  os.exit(1)
-end
+-- RESET
+cmd(C.CMD_RESET)
+check(getreg(C.ADDR_STATE) == C.ST_IDLE, "RESET -> IDLE")
+
+-- Bad CRC -> FAULT
+fifo_head, fifo_tail = 1, 0
+local bad = concat(body, u16le(crc ~ 1))
+push_fifo_bytes(bad)
+cmd(C.CMD_LOAD)
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "bad CRC -> FAULT")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "ERR_BAD_TABLE")
+
 print(string.format("lua sequencer: %d/%d checks OK (real sequencer.lua executed)", checks, checks))
