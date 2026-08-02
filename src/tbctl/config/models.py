@@ -601,6 +601,7 @@ PanelType = Literal[
     "sim_panel",
     "pid",
     "checklist_panel",
+    "xy",
 ]
 
 

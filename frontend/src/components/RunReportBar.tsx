@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { fetchRunReport, rerunRunReport, type RunReport } from "../api";
+import { fetchRunReport, fetchRuns, patchRunMeta, rerunRunReport, type RunReport } from "../api";
 import { useStore } from "../store";
+
+const OUTCOMES = ["good", "anomaly", "scrub"] as const;
 
 // Automated post-run review report (Sift-style): pass/fail per rule for the
 // selected run, shown while reviewing it. Rules live in configs/review.yaml.
@@ -19,20 +21,37 @@ function limitText(r: { limit_min: number | null; limit_max: number | null }): s
 
 export function RunReportBar() {
   const viewMode = useStore((s) => s.viewMode);
+  const setRuns = useStore((s) => s.setRuns);
+  const setViewMode = useStore((s) => s.setViewMode);
   const [report, setReport] = useState<RunReport | null>(null);
   const [msg, setMsg] = useState("");
+  const [tagText, setTagText] = useState("");
   const runId = viewMode.mode === "run" ? viewMode.run.run_id : null;
+  const run = viewMode.mode === "run" ? viewMode.run : null;
 
   useEffect(() => {
     setReport(null);
     setMsg("");
+    setTagText(run?.tags?.join(", ") ?? "");
     if (runId)
       fetchRunReport(runId)
         .then((r) => setReport(r.report))
         .catch((e) => setMsg(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
-  if (!runId) return null;
+  if (!runId || !run) return null;
+
+  // patch meta, refresh the runs list, and keep the selected run in sync
+  const saveMeta = (body: Parameters<typeof patchRunMeta>[1]) =>
+    patchRunMeta(runId, body)
+      .then(async () => {
+        const runs = (await fetchRuns()).runs;
+        setRuns(runs);
+        const fresh = runs.find((r) => r.run_id === runId);
+        if (fresh) setViewMode({ mode: "run", run: fresh });
+      })
+      .catch((e) => setMsg(String(e).replace(/^Error: /, "")));
 
   const rerun = () =>
     rerunRunReport(runId)
@@ -71,6 +90,45 @@ export function RunReportBar() {
       ))}
       <button className="btn" style={{ padding: "0 8px", fontSize: 9.5 }} onClick={rerun}>
         {report ? "Re-evaluate" : "Evaluate"}
+      </button>
+      <span className="spacer" style={{ flex: 1 }} />
+      {OUTCOMES.map((o) => (
+        <button
+          key={o}
+          className={`btn outcome-btn ${o} ${run.outcome === o ? "active" : ""}`}
+          style={{ padding: "0 8px", fontSize: 9.5 }}
+          title="run outcome (click again to clear)"
+          onClick={() =>
+            saveMeta(run.outcome === o ? { clear_outcome: true } : { outcome: o })
+          }
+        >
+          {o}
+        </button>
+      ))}
+      <input
+        className="modal-input"
+        style={{ width: 170, flex: "none" }}
+        placeholder="tags, comma separated"
+        value={tagText}
+        onChange={(e) => setTagText(e.target.value)}
+        onBlur={() => saveMeta({ tags: tagText.split(",").map((t) => t.trim()).filter(Boolean) })}
+        onKeyDown={(e) =>
+          e.key === "Enter" &&
+          saveMeta({ tags: tagText.split(",").map((t) => t.trim()).filter(Boolean) })
+        }
+      />
+      <button
+        className="btn"
+        style={{ padding: "0 8px", fontSize: 9.5 }}
+        title="copy a shareable link to this exact view"
+        onClick={() =>
+          navigator.clipboard
+            .writeText(window.location.href)
+            .then(() => setMsg("link copied"))
+            .catch(() => setMsg(window.location.href))
+        }
+      >
+        Copy link
       </button>
       {msg && <span style={{ fontSize: 10, color: "var(--amber)" }}>{msg}</span>}
     </div>

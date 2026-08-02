@@ -12,6 +12,7 @@ import { SimPanel } from "./panels/SimPanel";
 import { TimeseriesPanel } from "./panels/TimeseriesPanel";
 import { ValueTablePanel } from "./panels/ValueTablePanel";
 import { ValvePanel } from "./panels/ValvePanel";
+import { XYPanel } from "./panels/XYPanel";
 
 const Grid = WidthProvider(GridLayout);
 
@@ -25,6 +26,7 @@ export const PANEL_TITLES: Record<PanelConfig["type"], string> = {
   sim_panel: "Simulator",
   pid: "P&ID",
   checklist_panel: "Checklist",
+  xy: "XY Plot",
 };
 
 function PanelBody({ panel }: { panel: PanelConfig }) {
@@ -47,6 +49,8 @@ function PanelBody({ panel }: { panel: PanelConfig }) {
       return <PidPanel panel={panel} />;
     case "checklist_panel":
       return <ChecklistPanel />;
+    case "xy":
+      return <XYPanel panel={panel} />;
   }
 }
 

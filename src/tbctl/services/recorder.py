@@ -250,6 +250,26 @@ class Recorder:
             raise RecorderError("run is still recording")
         return path
 
+    def update_user_meta(
+        self, run_id: str, tags: list[str] | None, outcome: str | None, clear_outcome: bool
+    ) -> dict:
+        """Patch the mutable review metadata (tags / outcome) of a closed run.
+        Stored as a JSON attr in the run file; None leaves a field untouched."""
+        path = self._run_path(run_id)
+        with h5py.File(path, "r+") as f:
+            current = {}
+            if raw := f.attrs.get("user_meta"):
+                with contextlib.suppress(Exception):
+                    current = json.loads(raw)
+            if tags is not None:
+                current["tags"] = [t.strip()[:40] for t in tags if t.strip()][:20]
+            if clear_outcome:
+                current.pop("outcome", None)
+            elif outcome is not None:
+                current["outcome"] = outcome
+            f.attrs["user_meta"] = json.dumps(current)
+        return current
+
     def run_events(self, run_id: str) -> list[dict]:
         """Events mirrored into the run file (notes, seq_*, redline_tripped...)."""
         path = self._run_path(run_id)
@@ -341,8 +361,14 @@ def _meta_from(f: h5py.File, path: Path) -> dict:
     if raw := attrs.get("report_json"):
         with contextlib.suppress(Exception):
             report_summary = json.loads(raw).get("summary")
+    user_meta: dict = {}
+    if raw := attrs.get("user_meta"):
+        with contextlib.suppress(Exception):
+            user_meta = json.loads(raw)
     return {
         "report_summary": report_summary,
+        "tags": user_meta.get("tags", []),
+        "outcome": user_meta.get("outcome"),
         "run_id": str(attrs.get("run_id", path.stem)),
         "name": str(attrs.get("name", "")),
         "operator": str(attrs.get("operator", "")),

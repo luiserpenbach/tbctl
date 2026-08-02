@@ -65,6 +65,13 @@ class ChecklistCheck(BaseModel):
     checked: bool
 
 
+class RunMetaPatch(BaseModel):
+    tags: list[str] | None = None
+    # outcome: set to a value, or explicitly null to clear; omit = untouched
+    outcome: Literal["good", "anomaly", "scrub"] | None = None
+    clear_outcome: bool = False
+
+
 class AnnotationCreate(BaseModel):
     t0: float
     t1: float
@@ -444,6 +451,22 @@ def build_router(ctx: NodeContext) -> APIRouter:
             return ctx.recorder.run_meta(run_id)
         except KeyError as e:
             raise HTTPException(404, str(e)) from e
+
+    @r.patch("/runs/{run_id}/meta")
+    def run_meta_patch(run_id: str, body: RunMetaPatch) -> dict:
+        """Mutable review metadata: tags + outcome (good/anomaly/scrub)."""
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            meta = ctx.recorder.update_user_meta(
+                run_id, body.tags, body.outcome, body.clear_outcome
+            )
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+        ctx.events.log("run_meta_updated", run_id=run_id, **meta)
+        return {"ok": True, **meta}
 
     @r.get("/runs/{run_id}/report")
     def run_report(run_id: str) -> dict:

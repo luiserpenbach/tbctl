@@ -15,6 +15,7 @@ export function Sidebar() {
   const overlayRuns = useStore((s) => s.overlayRuns);
   const toggleOverlayRun = useStore((s) => s.toggleOverlayRun);
   const [query, setQuery] = useState("");
+  const [runQuery, setRunQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
 
@@ -55,6 +56,15 @@ export function Sidebar() {
       />
       <div className="tree">
         <div className="group-header">runs ({runs.length})</div>
+        {runs.length > 5 && (
+          <input
+            className="search"
+            style={{ margin: "2px 4px 4px", width: "calc(100% - 8px)" }}
+            placeholder="Filter runs (name, tag, outcome)…"
+            value={runQuery}
+            onChange={(e) => setRunQuery(e.target.value)}
+          />
+        )}
         <div
           className="chan"
           style={{ cursor: "pointer" }}
@@ -64,18 +74,43 @@ export function Sidebar() {
             ▶ live
           </span>
         </div>
-        {runs.slice(0, 20).map((r) => {
+        {runs
+          .filter((r) => {
+            const q = runQuery.toLowerCase().trim();
+            if (!q) return true;
+            return (
+              r.run_id.toLowerCase().includes(q) ||
+              (r.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
+              (r.outcome ?? "").includes(q) ||
+              r.operator.toLowerCase().includes(q)
+            );
+          })
+          .slice(0, 20)
+          .map((r) => {
           const active = viewMode.mode === "run" && viewMode.run.run_id === r.run_id;
           const overlaid = overlayRuns.some((o) => o.run_id === r.run_id);
+          const outcomeColor =
+            r.outcome === "good"
+              ? "var(--green)"
+              : r.outcome === "anomaly"
+                ? "var(--red)"
+                : r.outcome === "scrub"
+                  ? "var(--text-faint)"
+                  : null;
           return (
             <div
               key={r.run_id}
               className="chan"
               style={{ cursor: "pointer" }}
-              title={`${r.operator} — ${r.notes}`}
+              title={`${r.operator} — ${r.notes}${r.tags?.length ? ` · ${r.tags.join(", ")}` : ""}`}
               onClick={() => setViewMode({ mode: "run", run: r })}
             >
               <span style={{ color: active ? "var(--accent)" : overlaid ? "var(--amber)" : undefined }}>
+                {outcomeColor && (
+                  <span style={{ color: outcomeColor, marginRight: 4 }} title={r.outcome ?? ""}>
+                    ●
+                  </span>
+                )}
                 {r.run_id}
               </span>
               {viewMode.mode === "run" && !active && (

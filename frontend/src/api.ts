@@ -204,6 +204,21 @@ export const fetchRunReport = (runId: string) =>
 export const rerunRunReport = (runId: string) =>
   post<{ report: RunReport }>(`/api/runs/${runId}/report/rerun`);
 
+// ------------------------------------------------------ run meta (tier 2)
+
+export const patchRunMeta = async (
+  runId: string,
+  body: { tags?: string[]; outcome?: "good" | "anomaly" | "scrub"; clear_outcome?: boolean },
+) => {
+  const r = await fetch(`/api/runs/${runId}/meta`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+};
+
 // -------------------------------------------------------- annotations (tier 1)
 
 export interface Annotation {

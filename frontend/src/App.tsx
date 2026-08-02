@@ -6,11 +6,13 @@ import { DashboardGrid } from "./components/DashboardGrid";
 import { DashboardTabs } from "./components/DashboardTabs";
 import { PidEditor } from "./components/PidEditor";
 import { RunAnnotations } from "./components/RunAnnotations";
+import { RunEventsBar } from "./components/RunEventsBar";
 import { RunReportBar } from "./components/RunReportBar";
 import { SequencesEditor } from "./components/SequencesEditor";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { useStore } from "./store";
+import { applyHashOnce, startHashSync } from "./urlstate";
 import { connectWs } from "./ws";
 
 export default function App() {
@@ -25,11 +27,16 @@ export default function App() {
       const last = localStorage.getItem("tbctl.dashboard");
       const pick = last && r.dashboards.includes(last) ? last : r.dashboards[0];
       if (pick) useStore.getState().setDashboard(await fetchDashboard(pick));
+      await applyHashOnce(); // shareable link state wins over defaults
     });
+    const stopSync = startHashSync();
     const poll = () => fetchStatus().then((s) => useStore.getState().setStatus(s)).catch(() => {});
     poll();
     const iv = setInterval(poll, 2000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      stopSync();
+    };
   }, []);
 
   return (
@@ -44,6 +51,7 @@ export default function App() {
               <DashboardTabs />
               <RunReportBar />
               <RunAnnotations />
+              <RunEventsBar />
               <DashboardGrid />
             </>
           )}

@@ -14,6 +14,7 @@ const PANEL_TYPES: PanelConfig["type"][] = [
   "sim_panel",
   "pid",
   "checklist_panel",
+  "xy",
 ];
 
 const NEEDS_CHANNELS = new Set(["timeseries", "value_table"]);
@@ -201,6 +202,30 @@ export function PanelModal({
             onChange={setChannels}
             allowGlobs={type === "value_table"}
           />
+        )}
+        {type === "xy" && (
+          <div className="modal-row">
+            <span>X / Y</span>
+            {[0, 1].map((axis) => (
+              <select
+                key={axis}
+                className="seq-select"
+                value={channels[axis] ?? ""}
+                onChange={(e) => {
+                  const next = [...channels];
+                  next[axis] = e.target.value;
+                  setChannels(next.slice(0, 2));
+                }}
+              >
+                <option value="">{axis === 0 ? "x channel…" : "y channel…"}</option>
+                {useStore.getState().channels.filter(isReadable).map((c) => (
+                  <option key={c.tag} value={c.tag}>
+                    {c.tag}
+                  </option>
+                ))}
+              </select>
+            ))}
+          </div>
         )}
         {type === "pid" && (
           <div className="modal-row">

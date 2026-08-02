@@ -83,7 +83,8 @@ export interface PanelConfig {
     | "raw_table"
     | "sim_panel"
     | "pid"
-    | "checklist_panel";
+    | "checklist_panel"
+    | "xy";
   x: number;
   y: number;
   w: number;
@@ -111,6 +112,9 @@ export interface RunMeta {
   t_stop: number | null;
   sample_counts: Record<string, number>;
   size_bytes?: number;
+  tags?: string[];
+  outcome?: "good" | "anomaly" | "scrub" | null;
+  report_summary?: { total: number; passed: number; failed: number; skipped: number } | null;
 }
 
 export interface DashboardConfig {
