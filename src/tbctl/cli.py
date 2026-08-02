@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 
@@ -182,8 +183,16 @@ def cmd_deploy_lua(args: argparse.Namespace) -> int:
     try:
         version = deploy_script(dev, save_to_flash=not args.no_flash)
         print(f"sequencer.lua deployed and running (interp_version {version})")
-        applied = configure_watchdog(dev, chmap)
-        print(f"hardware watchdog armed: timeout {applied['WATCHDOG_TIMEOUT_S_DEFAULT']:.0f} s")
+        # Flash is briefly busy after LUA_SAVE_TO_FLASH; give USB/flash a beat
+        # before more *_DEFAULT writes or the handle can drop.
+        time.sleep(1.0)
+        try:
+            applied = configure_watchdog(dev, chmap)
+            print(
+                f"hardware watchdog armed: timeout {applied['WATCHDOG_TIMEOUT_S_DEFAULT']:.0f} s"
+            )
+        except Exception as e:  # noqa: BLE001 — node re-arms on startup
+            print(f"WARNING: watchdog arm failed ({e}); node will retry on startup")
         return 0
     except ScriptLoadError as e:
         print(f"deploy failed: {e}", file=sys.stderr)

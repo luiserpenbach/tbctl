@@ -1,340 +1,121 @@
--- ===========================================================================
--- tbctl sequencer -- frozen T7 Lua interpreter LOGIC (spec §6).
---
--- DO NOT EDIT LOGIC WITHOUT BUMPING INTERP_VERSION (shared/registers.yaml)
--- AND RERUNNING THE §10.3 HARDWARE ACCEPTANCE MEASUREMENTS.
---
--- This file is the hand-maintained logic body. The deployable artifact
--- lua/sequencer.lua is assembled by `tbctl codegen` as:
---     generated header (lua/gen/registers_gen.lua)
---   + CRC-16/CCITT-FALSE implementation (lua/crc16.lua, module return stripped)
---   + this file
---
--- Design rules (§6): sequences are data; the RUNNING loop body is
--- allocation-free; no string operations in the loop; all tables numeric and
--- pre-sized at LOAD. Host commands arrive via USER_RAM registers; the step
--- table arrives via USER_RAM FIFO0 in the §5 wire format (12-byte header
--- with spark_mask, 6-byte steps, CRC-16 trailer).
--- ===========================================================================
-
-local floor = math.floor
-local band = bit.band
-local rshift = bit.rshift
-local bnot = bit.bnot
-
-local mbR = MB.R
-local mbW = MB.W
-
--- MB data types
-local T_U16 = 0
-local T_U32 = 1
-
--- ---------------------------------------------------------------------------
--- state
--- ---------------------------------------------------------------------------
-local state = ST_IDLE
-local err = ERR_NONE
-
-local n_steps, n_abort = 0, 0
-local step_t, step_w = {}, {}
-local abort_t, abort_w = {}, {}
-local dio_inhibit = 0xFFFF
-local safe_word = 0
-local spark_guard = 0
-local spark_mask = 0
-local table_crc = 0
-
-local elapsed = 0        -- ms since FIRE (or abort start while ABORTING)
-local cur = 0            -- 1-based index of next step to apply
-local spark_on = 0       -- ms the spark bit has been continuously high
-local hb_last = 0        -- last observed HEARTBEAT value
-local hb_age = 0         -- ms since HEARTBEAT last changed
-local hb_timeout = DEFAULT_HB_TIMEOUT_MS
-local applied = 0        -- last applied output word
-
--- max table byte budget (128+128 steps): reject anything larger
-local MAX_TABLE_BYTES = HEADER_BYTES + 2 * MAX_STEPS * STEP_BYTES + TRAILER_BYTES
-
--- scratch parse buffer, pre-sized once at startup (bytes, 1-based)
-local buf = {}
-for i = 1, MAX_TABLE_BYTES do buf[i] = 0 end
-for i = 1, MAX_STEPS do
-  step_t[i] = 0; step_w[i] = 0; abort_t[i] = 0; abort_w[i] = 0
+-- Dense T7 sequencer (spec sec 6). Enums inlined. U = single upvalue.
+-- CMD 0nop 1load 2arm 3fire 4abort 5reset
+-- ST 0idle 1loaded 2armed 3run 4done 5aborting 6aborted 7fault
+-- ERR 0none 1hb 2host 3bad 4spark 5overrun
+U.f,U.a,U.s,U.n=math.floor,bit.band,bit.rshift,bit.bnot
+U.R,U.W,U.z,U.Z=MB.R,MB.W,0,1
+U.S,U.E,U.N,U.M=0,0,0,0
+U.T,U.V,U.X,U.Y={},{},{},{}
+U.I,U.w,U.G,U.g,U.C=0xFFFF,0,0,0,0
+U.t,U.i,U.o,U.h,U.j,U.H,U.p=0,0,0,0,0,U.K.h,0
+U.B=U.K.e+2*U.K.s*U.K.b+U.K.r
+U.b={}
+function U.u(b,i) return b[i]+b[i+1]*256 end
+function U.U(b,i) return b[i]+b[i+1]*256+b[i+2]*65536+b[i+3]*16777216 end
+function U.P()
+U.W(U.A.s,U.z,U.S)U.W(U.A.e,U.z,U.E)U.W(U.A.n,U.z,U.N*256+U.M)
+U.W(U.A.c,U.z,U.C)U.W(U.A.u,U.z,U.i)U.W(U.A.m,U.Z,U.t)
 end
-
--- ---------------------------------------------------------------------------
--- register publication
--- ---------------------------------------------------------------------------
-local function publish_static()
-  mbW(ADDR_STATE, T_U16, state)
-  mbW(ADDR_ERROR_CODE, T_U16, err)
-  mbW(ADDR_STEP_COUNT, T_U16, n_steps * 256 + n_abort)
-  mbW(ADDR_CRC16, T_U16, table_crc)
-  mbW(ADDR_CUR_STEP, T_U16, cur)
-  mbW(ADDR_ELAPSED_MS, T_U32, elapsed)
+function U.A_(v) U.p=v U.W(U.A.d,U.Z,v) end
+function U.L()
+-- Host allocates FIFO before writing; free it after drain so stream fits in RAM.
+local n=U.R(U.A.b,U.Z)
+if n>U.B then for i=1,U.f(n/2) do U.R(U.A.f,U.z) end U.W(U.A.p,U.Z,0) U.S=7 U.E=3 U.A_(U.w)U.P() return end
+local k=0
+for i=1,U.f(n/2) do local v=U.R(U.A.f,U.z) U.b[k+1]=U.a(v,255)U.b[k+2]=U.s(v,8)k=k+2 end
+U.W(U.A.p,U.Z,0)
+local ok=k>=U.K.e+U.K.r
+local ns,na,ih,sf,gd,mk=0,0,0,0,0,0
+if ok then
+ns=U.u(U.b,1)na=U.u(U.b,3)ih=U.u(U.b,5)sf=U.u(U.b,7)gd=U.u(U.b,9)mk=U.u(U.b,11)
+if ns>U.K.s or na>U.K.s or(gd~=0 and mk==0)or k~=U.K.e+(ns+na)*U.K.b+U.K.r then ok=false end
 end
-
--- ---------------------------------------------------------------------------
--- outputs
--- ---------------------------------------------------------------------------
-local function apply_word(w)
-  -- single masked DIO_STATE write = atomic multi-line application (§6.2).
-  -- DIO_INHIBIT persists on the device; it is (re)written at LOAD.
-  applied = w
-  mbW(ADDR_DIO_STATE, T_U32, w)
+local off=U.K.e
+if ok then
+local prev=-1
+for i=1,ns do
+local t=U.U(U.b,off+1)local v=U.u(U.b,off+5)
+if t<prev or t>3600000 then ok=false break end
+prev=t U.T[i]=t U.V[i]=v off=off+U.K.b
 end
-
--- ---------------------------------------------------------------------------
--- LOAD: drain FIFO, parse §5 wire format, verify, publish
--- ---------------------------------------------------------------------------
-local function cmd_load()
-  local nbytes = mbR(ADDR_FIFO_BYTES_IN, T_U32)
-  -- drain whatever is there, even if we then reject it
-  local n = nbytes
-  if n > MAX_TABLE_BYTES then
-    -- drain and discard oversized upload
-    local words = floor(n / 2)
-    for i = 1, words do mbR(ADDR_FIFO_DATA, T_U16) end
-    state = ST_FAULT; err = ERR_BAD_TABLE
-    apply_word(safe_word)
-    publish_static()
-    return
-  end
-  local nwords = floor(n / 2)
-  local k = 0
-  for i = 1, nwords do
-    local w = mbR(ADDR_FIFO_DATA, T_U16)
-    buf[k + 1] = band(w, 0xFF)
-    buf[k + 2] = rshift(w, 8)
-    k = k + 2
-  end
-
-  local ok = true
-  if k < HEADER_BYTES + TRAILER_BYTES then ok = false end
-
-  local ns, na, inhibit, safe, guard, mask = 0, 0, 0, 0, 0, 0
-  if ok then
-    ns      = buf[1] + buf[2] * 256
-    na      = buf[3] + buf[4] * 256
-    inhibit = buf[5] + buf[6] * 256
-    safe    = buf[7] + buf[8] * 256
-    guard   = buf[9] + buf[10] * 256
-    mask    = buf[11] + buf[12] * 256
-    if ns > MAX_STEPS or na > MAX_STEPS then ok = false end
-    if guard ~= 0 and mask == 0 then ok = false end
-    if ok and k ~= HEADER_BYTES + (ns + na) * STEP_BYTES + TRAILER_BYTES then ok = false end
-  end
-
-  if ok then
-    -- parse steps; enforce monotonic times and sane magnitudes
-    local off = HEADER_BYTES
-    local prev = -1
-    for i = 1, ns do
-      local t = buf[off + 1] + buf[off + 2] * 256 + buf[off + 3] * 65536 + buf[off + 4] * 16777216
-      local w = buf[off + 5] + buf[off + 6] * 256
-      if t < prev or t > 3600000 then ok = false end
-      prev = t
-      step_t[i] = t; step_w[i] = w
-      off = off + STEP_BYTES
-    end
-    prev = -1
-    for i = 1, na do
-      local t = buf[off + 1] + buf[off + 2] * 256 + buf[off + 3] * 65536 + buf[off + 4] * 16777216
-      local w = buf[off + 5] + buf[off + 6] * 256
-      if t < prev or t > 3600000 then ok = false end
-      prev = t
-      abort_t[i] = t; abort_w[i] = w
-      off = off + STEP_BYTES
-    end
-    if ok then
-      -- recompute CRC over header+steps+abort; compare against trailer
-      local crc = crc16(buf, off)
-      local stated = buf[off + 1] + buf[off + 2] * 256
-      if crc ~= stated then
-        ok = false
-      else
-        table_crc = crc
-      end
-    end
-  end
-
-  if ok then
-    n_steps, n_abort = ns, na
-    dio_inhibit, safe_word = inhibit, safe
-    spark_guard, spark_mask = guard, mask
-    cur = 0
-    elapsed = 0
-    -- controlled bits: outputs, driven; inhibit persists for DIO writes
-    mbW(ADDR_DIO_INHIBIT, T_U32, 0xFFFF0000 + dio_inhibit)
-    mbW(ADDR_DIO_DIRECTION, T_U32, band(bnot(dio_inhibit), 0xFFFF))
-    state = ST_LOADED
-    err = ERR_NONE
-  else
-    state = ST_FAULT
-    err = ERR_BAD_TABLE
-    apply_word(safe_word)
-  end
-  publish_static()
 end
-
--- ---------------------------------------------------------------------------
--- transitions
--- ---------------------------------------------------------------------------
-local function start_abort(reason)
-  state = ST_ABORTING
-  err = reason
-  elapsed = 0
-  cur = 1
-  spark_on = 0
-  if n_abort == 0 then
-    apply_word(safe_word)
-    state = ST_ABORTED
-  end
-  publish_static()
+if ok then
+local prev=-1
+for i=1,na do
+local t=U.U(U.b,off+1)local v=U.u(U.b,off+5)
+if t<prev or t>3600000 then ok=false break end
+prev=t U.X[i]=t U.Y[i]=v off=off+U.K.b
 end
-
-local function check_heartbeat()
-  local hb = mbR(ADDR_HEARTBEAT, T_U16)
-  if hb ~= hb_last then
-    hb_last = hb
-    hb_age = 0
-  else
-    hb_age = hb_age + 1
-  end
-  return hb_age <= hb_timeout
 end
-
-local function poll_cmd()
-  local cmd = mbR(ADDR_CMD, T_U16)
-  if cmd == CMD_NOP then return end
-  mbW(ADDR_CMD, T_U16, CMD_NOP)  -- consume
-
-  if cmd == CMD_LOAD and state == ST_IDLE then
-    cmd_load()
-  elseif cmd == CMD_ARM and state == ST_LOADED then
-    local code = mbR(ADDR_ARM_CODE, T_U16)
-    if code == ARM_MAGIC then
-      mbW(ADDR_ARM_CODE, T_U16, 0)
-      local t = mbR(ADDR_HB_TIMEOUT_MS, T_U16)
-      if t > 0 then hb_timeout = t else hb_timeout = DEFAULT_HB_TIMEOUT_MS end
-      apply_word(safe_word)              -- defined start state (§6.2)
-      hb_last = mbR(ADDR_HEARTBEAT, T_U16)
-      hb_age = 0
-      state = ST_ARMED
-      publish_static()
-    end
-  elseif cmd == CMD_FIRE and state == ST_ARMED then
-    state = ST_RUNNING
-    elapsed = 0
-    cur = 1
-    spark_on = 0
-    publish_static()
-  elseif cmd == CMD_ABORT then
-    if state == ST_RUNNING then
-      start_abort(ERR_HOST_ABORT)
-    elseif state == ST_ARMED then
-      apply_word(safe_word)
-      state = ST_ABORTED
-      err = ERR_HOST_ABORT
-      publish_static()
-    end
-  elseif cmd == CMD_RESET then
-    if state == ST_LOADED or state == ST_DONE or state == ST_ABORTED or state == ST_FAULT then
-      if n_steps > 0 then apply_word(safe_word) end
-      state = ST_IDLE
-      err = ERR_NONE
-      cur = 0
-      elapsed = 0
-      publish_static()
-    end
-  end
+if ok then local c=U.crc16(U.b,off) if c~=U.u(U.b,off+1) then ok=false else U.C=c end end
+if ok then
+U.N,U.M,U.I,U.w,U.G,U.g=ns,na,ih,sf,gd,mk U.i,U.t=0,0
+U.W(U.A.i,U.Z,0xFFFF0000+U.I)U.W(U.A.o,U.Z,U.a(U.n(U.I),65535))U.S=1 U.E=0
+else U.S=7 U.E=3 U.A_(U.w) end
+U.P()
 end
-
--- ---------------------------------------------------------------------------
--- the 1 ms tick (allocation-free)
--- ---------------------------------------------------------------------------
-local function tick()
-  poll_cmd()
-
-  if state == ST_ARMED then
-    if not check_heartbeat() then start_abort(ERR_HB_TIMEOUT) end
-    return
-  end
-
-  if state == ST_RUNNING then
-    elapsed = elapsed + 1
-    -- catch-up semantics: apply every due step, in order, never skip
-    while cur <= n_steps and step_t[cur] <= elapsed do
-      apply_word(step_w[cur])
-      cur = cur + 1
-    end
-    -- spark guard (D9): continuous-high time of the spark bit in the
-    -- APPLIED word; trip -> force spark low, then abort
-    if spark_guard > 0 then
-      if band(applied, spark_mask) ~= 0 then
-        spark_on = spark_on + 1
-        if spark_on > spark_guard then
-          apply_word(band(applied, bnot(spark_mask)))
-          start_abort(ERR_SPARK_GUARD)
-          return
-        end
-      else
-        spark_on = 0
-      end
-    end
-    if not check_heartbeat() then
-      start_abort(ERR_HB_TIMEOUT)
-      return
-    end
-    if cur > n_steps then
-      state = ST_DONE
-      publish_static()
-      return
-    end
-    mbW(ADDR_CUR_STEP, T_U16, cur)
-    if band(elapsed, 15) == 0 then mbW(ADDR_ELAPSED_MS, T_U32, elapsed) end
-    return
-  end
-
-  if state == ST_ABORTING then
-    elapsed = elapsed + 1
-    while cur <= n_abort and abort_t[cur] <= elapsed do
-      apply_word(abort_w[cur])
-      cur = cur + 1
-    end
-    if cur > n_abort then
-      apply_word(safe_word)               -- hold safe word (§6.2)
-      state = ST_ABORTED
-      publish_static()
-      return
-    end
-    mbW(ADDR_CUR_STEP, T_U16, cur)
-    if band(elapsed, 15) == 0 then mbW(ADDR_ELAPSED_MS, T_U32, elapsed) end
-    return
-  end
+function U.Q(r)
+U.S=5 U.E=r U.t=0 U.i=1 U.o=0
+if U.M==0 then U.A_(U.w)U.S=6 end
+U.P()
 end
-
--- ---------------------------------------------------------------------------
--- startup
--- ---------------------------------------------------------------------------
-mbW(ADDR_FIFO_ALLOCATE, T_U32, ALLOCATE_BYTES)
-mbW(ADDR_INTERP_VERSION, T_U16, INTERP_VERSION)
-publish_static()
-
-LJ.IntervalConfig(0, TICK_MS)
-
--- a stall this long while sequencing means timing control is lost -> abort
-local OVERRUN_TICKS = 250
-
+function U.C_()
+local c=U.R(U.A.q,U.z)
+if c==0 then return end
+U.W(U.A.q,U.z,0)
+if c==1 and U.S==0 then U.L()
+elseif c==2 and U.S==1 then
+if U.R(U.A.a,U.z)==U.K.m then
+U.W(U.A.a,U.z,0)
+local t=U.R(U.A.t,U.z)U.H=(t>0)and t or U.K.h
+U.A_(U.w)U.h=U.R(U.A.h,U.z)U.j=0 U.S=2 U.P()
+end
+elseif c==3 and U.S==2 then U.S=3 U.t=0 U.i=1 U.o=0 U.P()
+elseif c==4 then
+if U.S==3 then U.Q(2) elseif U.S==2 then U.A_(U.w)U.S=6 U.E=2 U.P() end
+elseif c==5 and(U.S==1 or U.S==4 or U.S==6 or U.S==7) then
+if U.N>0 then U.A_(U.w) end
+U.S=0 U.E=0 U.i=0 U.t=0 U.P()
+end
+end
+function U.K_()
+U.C_()
+if U.S==2 then
+local hb=U.R(U.A.h,U.z)
+if hb~=U.h then U.h=hb U.j=0 else U.j=U.j+1 end
+if U.j>U.H then U.Q(1) end
+return
+end
+if U.S==3 then
+U.t=U.t+1
+while U.i<=U.N and U.T[U.i]<=U.t do U.A_(U.V[U.i])U.i=U.i+1 end
+if U.G>0 then
+if U.a(U.p,U.g)~=0 then U.o=U.o+1 if U.o>U.G then U.A_(U.a(U.p,U.n(U.g)))U.Q(4) return end
+else U.o=0 end
+end
+local hb=U.R(U.A.h,U.z)
+if hb~=U.h then U.h=hb U.j=0 else U.j=U.j+1 end
+if U.j>U.H then U.Q(1) return end
+if U.i>U.N then U.S=4 U.P() return end
+U.W(U.A.u,U.z,U.i)
+if U.a(U.t,15)==0 then U.W(U.A.m,U.Z,U.t) end
+return
+end
+if U.S==5 then
+U.t=U.t+1
+while U.i<=U.M and U.X[U.i]<=U.t do U.A_(U.Y[U.i])U.i=U.i+1 end
+if U.i>U.M then U.A_(U.w)U.S=6 U.P() return end
+U.W(U.A.u,U.z,U.i)
+if U.a(U.t,15)==0 then U.W(U.A.m,U.Z,U.t) end
+end
+end
+U.W(U.A.v,U.z,U.K.v)U.P()
+LJ.IntervalConfig(0,U.K.k)
 while true do
-  local ticks = LJ.CheckInterval(0)
-  if ticks and ticks > 0 then
-    if ticks > OVERRUN_TICKS and (state == ST_RUNNING or state == ST_ABORTING) then
-      start_abort(ERR_OVERRUN)
-    end
-    if ticks > 1000 then ticks = 1000 end
-    for i = 1, ticks do
-      tick()
-    end
-  end
+local x=LJ.CheckInterval(0)
+if x and x>0 then
+if x>250 and(U.S==3 or U.S==5) then U.Q(5) end
+if x>1000 then x=1000 end
+for i=1,x do U.K_() end
+end
 end

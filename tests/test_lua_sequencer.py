@@ -20,8 +20,8 @@ def test_sequencer_artifact_exists_and_is_assembled():
     src = (REPO_ROOT / "lua" / "sequencer.lua").read_text()
     assert "ASSEMBLED ARTIFACT" in src
     assert "DO NOT EDIT LOGIC WITHOUT BUMPING INTERP_VERSION" in src
-    assert "local ADDR_CMD" in src  # generated header inlined
-    assert "local function crc16" in src  # CRC inlined
+    assert "U.A = {" in src  # generated header inlined (single-upvalue table)
+    assert "function U.crc16" in src  # CRC inlined into U
     assert "return {" not in src  # module export stripped
 
 

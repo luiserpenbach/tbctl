@@ -44,6 +44,18 @@ class DeviceInterface(Protocol):
         """Array write to a single (FIFO) register, e.g. the step-table upload."""
         ...
 
+    def write_name_bytes(self, name: str, data: bytes) -> None:
+        """Byte-buffer write (e.g. LUA_SOURCE_WRITE). Not the same as write_name_array."""
+        ...
+
+    def read_name_bytes(self, name: str, num_bytes: int) -> bytes:
+        """Byte-buffer read (e.g. LUA_DEBUG_DATA)."""
+        ...
+
+    def reboot(self, delay_ticks: int = 40) -> None:
+        """Soft-reboot device and reopen the connection."""
+        ...
+
     # -- streaming ---------------------------------------------------------
 
     def stream_start(
@@ -112,12 +124,58 @@ class LjmDevice:
     def write_name_array(self, name: str, values: list[int]) -> None:
         self._ljm.eWriteNameArray(self._h(), name, len(values), values)
 
+    def write_name_bytes(self, name: str, data: bytes) -> None:
+        # LUA_SOURCE_WRITE (and other buffer regs) require the ByteArray API;
+        # eWriteNameArray writes float register values and corrupts the payload.
+        self._ljm.eWriteNameByteArray(self._h(), name, len(data), data)
+
+    def read_name_bytes(self, name: str, num_bytes: int) -> bytes:
+        if num_bytes <= 0:
+            return b""
+        raw = self._ljm.eReadNameByteArray(self._h(), name, num_bytes)
+        return bytes(raw)
+
+    def write_address_u32(self, address: int, value: int) -> None:
+        self._ljm.eWriteAddress(self._h(), address, self._ljm.constants.UINT32, value)
+
+    def reboot(self, delay_ticks: int = 40) -> None:
+        """Soft-reboot the T7 (SYSTEM_REBOOT = 0x4C4Axxxx) and reopen.
+
+        Required to reclaim shared heap after failed Lua compiles. Must use the
+        UINT32 address write — eWriteName float can mangle the magic prefix.
+        """
+        import time
+
+        # 0x4C4A0000 | ticks; each tick is 50 ms.
+        code = 0x4C4A0000 | (delay_ticks & 0xFFFF)
+        try:
+            self.write_address_u32(61998, code)
+        finally:
+            with contextlib.suppress(Exception):
+                self.close()
+        deadline = time.monotonic() + 15.0
+        last_err: Exception | None = None
+        time.sleep(max(delay_ticks, 1) * 0.05 + 0.5)
+        while time.monotonic() < deadline:
+            try:
+                self.open()
+                return
+            except Exception as e:  # noqa: BLE001 — retry until device returns
+                last_err = e
+                time.sleep(0.5)
+        raise DeviceError(f"device did not return after reboot: {last_err}")
+
     def stream_start(
         self, scan_names: list[str], scan_rate_hz: float, scans_per_read: int
     ) -> float:
         addrs = self._ljm.namesToAddresses(len(scan_names), scan_names)[0]
         self._scan_names = list(scan_names)
         self._scans_per_read = scans_per_read
+        # Keep the stream buffer small so it fits beside the Lua sequencer in
+        # the T7's 64KB shared heap. 4096+ triggers SYSTEM_MEMORY_BEREFT with
+        # the dense sequencer; 2048 is the practical ceiling on USB.
+        with contextlib.suppress(Exception):
+            self._ljm.eWriteName(self._h(), "STREAM_BUFFER_SIZE_BYTES", 2048)
         actual = self._ljm.eStreamStart(self._h(), scans_per_read, len(addrs), addrs, scan_rate_hz)
         return float(actual)
 

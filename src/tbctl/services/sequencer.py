@@ -122,6 +122,11 @@ class SequencerService:
         def _upload() -> None:
             if self.state() != SeqState.IDLE:
                 self._write("CMD", Cmd.RESET)
+            # Allocate FIFO for the upload only; Lua frees it after PARSE so the
+            # T7 shared heap can hold the stream buffer alongside the sequencer.
+            from tbctl.hw.registers_gen import FIFO_ALLOCATE_BYTES
+
+            self._iface.write_name(REG_NAME["FIFO_ALLOCATE"], float(FIFO_ALLOCATE_BYTES))
             self._iface.write_name_array(REG_NAME["FIFO_DATA"], compiled.table.to_u16_words())
 
         await asyncio.to_thread(_upload)
