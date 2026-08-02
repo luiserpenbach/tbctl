@@ -30,7 +30,10 @@ const AXIS = {
   ticks: { stroke: "#262626" },
 };
 
-const SYNC_KEY = uPlot.sync("tbctl");
+// separate cursor-sync groups: live charts share an epoch x axis, run charts
+// can be FIRE-relative — syncing across the two puts the cursor nowhere
+const SYNC_LIVE = uPlot.sync("tbctl-live");
+const SYNC_RUN = uPlot.sync("tbctl-run");
 const DEFAULT_WINDOW_S = 60;
 const runShort = (runId: string) => runId.replace(/^\d{8}-/, "");
 
@@ -104,18 +107,25 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const [annLabel, setAnnLabel] = useState("");
   const [annSev, setAnnSev] = useState<Annotation["severity"]>("warn");
 
-  // one-time backfill of the ring-buffer window (live mode)
+  // backfill of the ring-buffer window (live mode) — re-runs on every WS
+  // (re)connect so an outage gap is refilled from the server ring (H9)
+  const wsGeneration = useStore((s) => s.wsGeneration);
   useEffect(() => {
     if (!tags.length || isHistory) return;
+    let cancelled = false; // stale-guard: a late response must not seed old tags
     fetchLive(tags, 300, 2000)
       .then((r) => {
+        if (cancelled) return;
         for (const tag of tags) {
           const s = r.series[tag];
           if (s) buffers.seed(tag, s.t, s.mean);
         }
       })
       .catch(() => {});
-  }, [tags, isHistory]);
+    return () => {
+      cancelled = true;
+    };
+  }, [tags, isHistory, wsGeneration]);
 
   useEffect(() => {
     const el = elRef.current;
@@ -128,6 +138,19 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         : [];
     const relative = runsToPlot.length > 1;
 
+    // mixed-rate charts: uPlot.join leaves alignment holes in slower series;
+    // draw their points so they stay visible next to a faster series instead
+    // of vanishing into gaps
+    const rateOf = (tag: string) => channels.find((c) => c.tag === tag)?.rate_hz;
+    const rates = tags
+      .map(rateOf)
+      .filter((r): r is number => r !== undefined && r > 0);
+    const maxRate = rates.length ? Math.max(...rates) : 0;
+    const sparse = (tag: string) => {
+      const r = rateOf(tag);
+      return maxRate > 0 && r !== undefined && r > 0 && r < maxRate;
+    };
+
     const seriesDefs =
       runsToPlot.length > 0
         ? runsToPlot.flatMap((run, ri) =>
@@ -137,14 +160,14 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
               width: ri === 0 ? 1.6 : 1.1,
               dash: ri === 0 ? undefined : ([6, 4] as number[]),
               alpha: ri === 0 ? 1 : 0.75,
-              points: { show: false },
+              points: { show: sparse(tag), size: 4 },
             })),
           )
         : tags.map((tag, i) => ({
             label: tag,
             stroke: PALETTE[i % PALETTE.length],
             width: 1.4,
-            points: { show: false },
+            points: { show: sparse(tag), size: 4 },
           }));
     const nSeries = seriesDefs.length;
 
@@ -152,7 +175,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       width: el.clientWidth,
       height: el.clientHeight,
       cursor: {
-        sync: { key: SYNC_KEY.key },
+        sync: { key: (isHistory ? SYNC_RUN : SYNC_LIVE).key },
         drag: { x: true, y: false },
       },
       scales: {
@@ -263,11 +286,22 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     // debug/testing handle (used by the Playwright checks)
     (el as HTMLDivElement & { __uplot?: uPlot }).__uplot = plot;
 
+    // apply the current hide/show set to the fresh plot (run view included,
+    // M24). Series are laid out run-major, so a tag maps to every
+    // (si - 1) % tags.length slot.
+    for (let si = 1; si <= nSeries; si++) {
+      const tag = tags[(si - 1) % tags.length];
+      if (hiddenRef.current.has(tag)) plot.setSeries(si, { show: false });
+    }
+
     const ro = new ResizeObserver(() => {
       plot.setSize({ width: el.clientWidth, height: el.clientHeight });
     });
     ro.observe(el);
 
+    // stale-guard token (M22): a slow run-A fetch resolving after a switch
+    // to run B must not write refs/markers/data for the wrong run
+    let cancelled = false;
     let off = () => {};
     if (isHistory && viewMode.mode === "run") {
       markersRef.current = [];
@@ -290,6 +324,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         }),
       )
         .then((items) => {
+          if (cancelled) return;
           const tables: uPlot.AlignedData[] = [];
           const present: boolean[] = [];
           for (const it of items) {
@@ -327,17 +362,17 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             plot.redraw();
           }
         })
-        .catch((e) => console.error("run chart load failed:", e));
+        .catch((e) => {
+          if (!cancelled) console.error("run chart load failed:", e);
+        });
     } else {
       markersRef.current = [];
       annRef.current = [];
       setSelRange(null);
       setAnnForm(null);
       off = onTick(() => {
-        const data = buffers.aligned(tags);
-        // apply series visibility
-        tags.forEach((tag, i) => plot.setSeries(i + 1, { show: !hiddenRef.current.has(tag) }));
-        plot.setData(data, false);
+        // series visibility is applied on toggle (effect below), not per tick
+        plot.setData(buffers.aligned(tags), false);
         const latest = buffers.latestTime();
         if (followRef.current && latest !== null) {
           plot.setScale("x", { min: latest - windowRef.current, max: latest });
@@ -346,6 +381,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     }
 
     return () => {
+      cancelled = true;
       off();
       ro.disconnect();
       plot.destroy();
@@ -354,6 +390,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tags.join("|"),
+    channels,
     panel.y_axis.mode,
     panel.y_axis.min,
     panel.y_axis.max,
@@ -364,6 +401,22 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     overlayRuns.map((o) => o.run_id).join("|"),
     annVersion,
   ]);
+
+  // series hide/show — works in run view too (M24), and only touches uPlot
+  // when a chip actually changed instead of on every 10 Hz tick (F8). Run
+  // overlays reuse the same tag order per run, so one toggle hides the tag
+  // across every overlaid run; overlay membership itself stays with its own
+  // chips (toggleOverlayRun).
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot || !tags.length) return;
+    for (let si = 1; si < plot.series.length; si++) {
+      const tag = tags[(si - 1) % tags.length];
+      const show = !hidden.has(tag);
+      if (plot.series[si].show !== show) plot.setSeries(si, { show });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hidden]);
 
   const saveAnnotation = () => {
     if (!annForm || viewMode.mode !== "run" || !annLabel.trim()) return;

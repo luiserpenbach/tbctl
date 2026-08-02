@@ -4,6 +4,11 @@
 -- tick count — so tests control virtual time exactly.
 --
 -- Run from the repo root:  lua5.4 tests/lua/run_sequencer_tests.lua
+-- An optional argument names the script to execute (used by the pytest
+-- wrapper to run the MINIFIED deploy artifact through the same suite):
+--   lua5.4 tests/lua/run_sequencer_tests.lua /path/to/sequencer.min.lua
+
+local SEQ_PATH = (arg and arg[1]) or "lua/sequencer.lua"
 
 dofile("tests/lua/bit_compat.lua")
 local crcmod = dofile("lua/crc16.lua")
@@ -115,7 +120,7 @@ LJ = {
 
 -- ------------------------------------------------------------------ driver
 local co = coroutine.create(function()
-  dofile("lua/sequencer.lua")
+  dofile(SEQ_PATH)
 end)
 
 local function resume(...)
@@ -163,6 +168,10 @@ local function check(cond, msg)
   end
 end
 
+local function spark_bit(v) -- bit 6 (0x0040) of a DIO word
+  return math.floor(v / 64) % 2 == 1
+end
+
 -- --------------------------------------------------------------- scenarios
 check(getreg(C.ADDR_INTERP_VERSION) == C.INTERP_VERSION, "interp_version published")
 check(getreg(C.ADDR_STATE) == C.ST_IDLE, "starts IDLE")
@@ -200,11 +209,36 @@ local body = concat(header, steps)
 local crc = crcmod.crc16(body, #body)
 local table_bytes = concat(body, u16le(crc))
 
+-- ---------------------------------------------------------------------------
+-- C3: FIRST-BOOT FAULT. A rejected first LOAD must leave DIO completely
+-- untouched: DIO_INHIBIT/DIO_DIRECTION were never programmed, so the T7
+-- power-on default (all lines inputs, inhibit 0) is the only safe state and
+-- writing DIO_STATE would drive every line as an output.
+-- ---------------------------------------------------------------------------
+push_fifo_bytes(concat(body, u16le(crc ~ 1)))
+cmd(C.CMD_LOAD)
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "first-boot bad table -> FAULT")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "first-boot ERR_BAD_TABLE")
+check(#dio_writes == 0, "first-boot FAULT writes no DIO_STATE (C3)")
+check(regs[C.ADDR_DIO_INHIBIT] == nil and regs[C.ADDR_DIO_DIRECTION] == nil,
+  "first-boot FAULT leaves DIO_INHIBIT/DIO_DIRECTION unprogrammed")
+check(getreg(C.ADDR_CRC16) == 0 and getreg(C.ADDR_STEP_COUNT) == 0,
+  "FAULT publishes zeroed table identity (no stale CRC/step count)")
+cmd(C.CMD_ABORT) -- M11: ABORT in an unconfigured FAULT has nothing safe to write
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "ABORT in first-boot FAULT stays FAULT")
+check(#dio_writes == 0, "ABORT in first-boot FAULT writes no DIO_STATE")
+cmd(C.CMD_RESET)
+check(getreg(C.ADDR_STATE) == C.ST_IDLE, "RESET from first-boot FAULT -> IDLE")
+check(#dio_writes == 0, "RESET from first-boot FAULT writes no DIO_STATE")
+
 -- LOAD
 push_fifo_bytes(table_bytes)
 cmd(C.CMD_LOAD)
 check(getreg(C.ADDR_STATE) == C.ST_LOADED, "LOAD -> LOADED")
 check(getreg(C.ADDR_CRC16) == crc, "CRC echoed")
+check(regs[C.ADDR_DIO_INHIBIT] == inhibit, "LOAD programs DIO_INHIBIT")
+check(regs[C.ADDR_DIO_DIRECTION] == 65535 - inhibit,
+  "LOAD programs DIO_DIRECTION as exact 16-bit complement (no bnot)")
 
 -- ARM
 setreg(C.ADDR_ARM_CODE, C.ARM_MAGIC)
@@ -227,13 +261,24 @@ check(getreg(C.ADDR_STATE) == C.ST_DONE, "DONE after last step")
 cmd(C.CMD_RESET)
 check(getreg(C.ADDR_STATE) == C.ST_IDLE, "RESET -> IDLE")
 
--- Bad CRC -> FAULT
+-- Bad CRC after a previous successful LOAD -> FAULT, safe word driven
 fifo_head, fifo_tail = 1, 0
 local bad = concat(body, u16le(crc ~ 1))
 push_fifo_bytes(bad)
+local pre_fault_writes = #dio_writes
 cmd(C.CMD_LOAD)
 check(getreg(C.ADDR_STATE) == C.ST_FAULT, "bad CRC -> FAULT")
 check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "ERR_BAD_TABLE")
+check(#dio_writes == pre_fault_writes + 1 and dio_writes[#dio_writes].value == safe,
+  "post-config FAULT drives the previous table's safe word")
+check(getreg(C.ADDR_CRC16) == 0 and getreg(C.ADDR_STEP_COUNT) == 0,
+  "post-config FAULT zeroes published table identity")
+-- M11: ABORT while in a configured FAULT re-asserts the safe word, stays FAULT
+cmd(C.CMD_ABORT)
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "ABORT in FAULT stays FAULT")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "ABORT in FAULT keeps the fault code")
+check(#dio_writes == pre_fault_writes + 2 and dio_writes[#dio_writes].value == safe,
+  "ABORT in configured FAULT re-asserts the safe word")
 cmd(C.CMD_RESET)
 check(getreg(C.ADDR_STATE) == C.ST_IDLE, "RESET from FAULT")
 
@@ -370,26 +415,38 @@ check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "armed hb loss -> ABORTED")
 check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HB_TIMEOUT, "armed hb loss error code")
 cmd(C.CMD_RESET)
 
--- spark guard: bit 6 held high past guard -> forced low + abort
+-- spark guard while RUNNING: bit 6 held high past guard -> forced low + abort.
+-- Scoped to THIS scenario's writes (the old cumulative scan was tautological).
 load_table({
   steps = { { 0, 0x0040 }, { 5000, SAFE } },
   abort = { { 0, SAFE } },
   guard = 100, mask = 0x0040,
 })
 do_arm(500)
+local spark_scan = #dio_writes + 1
 cmd(C.CMD_FIRE)
+local spark_fire = now_tick -- spark word applied on the FIRE tick itself
 for i = 1, 50 do step(1) end
 beat()
 check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "spark on, pre-guard still running")
 for i = 1, 60 do step(1) end
 check(getreg(C.ADDR_ERROR_CODE) == C.ERR_SPARK_GUARD, "guard trip -> ERR_SPARK_GUARD")
-local forced_low = false
-for _, w in ipairs(dio_writes) do
-  if w.tick > fire_tick and w.value % 128 < 64 then forced_low = true end
+local seen_on, forced_at = false, nil
+for k = spark_scan, #dio_writes do
+  local w = dio_writes[k]
+  if spark_bit(w.value) then
+    seen_on = true
+  elseif seen_on and not forced_at then
+    forced_at = w.tick
+  end
 end
-check(forced_low, "spark bit forced low on trip")
+check(seen_on, "spark bit observed high in this scenario")
+check(forced_at ~= nil, "spark bit forced low after being high")
+check(forced_at == spark_fire + 100,
+  "force-low lands when max-on exceeded (got +" .. tostring(forced_at and (forced_at - spark_fire)) .. ")")
 step(10)
 check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "spark guard ends ABORTED")
+check(not spark_bit(dio_writes[#dio_writes].value), "final word has spark low")
 cmd(C.CMD_RESET)
 
 -- abort while ARMED goes straight to safe/ABORTED
@@ -400,14 +457,190 @@ check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "abort while armed -> ABORTED")
 check(dio_writes[#dio_writes].value == SAFE, "armed abort applies safe word")
 cmd(C.CMD_RESET)
 
--- truncated upload -> FAULT
+-- corrupted trailing byte -> FAULT (odd byte is zero-padded to a full word,
+-- so the word count still matches and the CRC check is what catches it)
 fifo_head, fifo_tail = 1, 0
 local tb = build_table(STD)
 table.remove(tb) -- drop final byte
 push_fifo_bytes(tb)
 cmd(C.CMD_LOAD)
-check(getreg(C.ADDR_STATE) == C.ST_FAULT, "truncated upload -> FAULT")
-check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "truncated error code")
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "corrupted trailing byte -> FAULT (CRC)")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "trailing-byte error code")
+cmd(C.CMD_RESET)
+
+-- REAL truncation: drop one FULL word so the declared step counts no longer
+-- match the word count -- must trip the length check, not the CRC
+fifo_head, fifo_tail = 1, 0
+local tw = build_table(STD)
+table.remove(tw)
+table.remove(tw) -- two bytes = one u16 word
+push_fifo_bytes(tw)
+cmd(C.CMD_LOAD)
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "word-truncated upload -> FAULT (length check)")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "word-truncation error code")
+cmd(C.CMD_RESET)
+
+-- header rejection: declared n_steps > MAX_STEPS (with no rows present)
+local function load_raw(bytes)
+  fifo_head, fifo_tail = 1, 0
+  push_fifo_bytes(bytes)
+  setreg(C.ADDR_FIFO_ALLOCATE, C.ALLOCATE_BYTES)
+  cmd(C.CMD_LOAD)
+end
+local hdr_ns = concat(u16le(C.MAX_STEPS + 1), u16le(0), u16le(0), u16le(SAFE), u16le(0), u16le(0))
+load_raw(concat(hdr_ns, u16le(crcmod.crc16(hdr_ns, #hdr_ns))))
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "header ns > MAX_STEPS rejected")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "ns-overflow error code")
+check(getreg(C.ADDR_FIFO_ALLOCATE) == 0, "FIFO freed after ns-overflow reject")
+cmd(C.CMD_RESET)
+
+-- header rejection: declared n_abort_steps > MAX_STEPS
+local hdr_na = concat(u16le(0), u16le(C.MAX_STEPS + 1), u16le(0), u16le(SAFE), u16le(0), u16le(0))
+load_raw(concat(hdr_na, u16le(crcmod.crc16(hdr_na, #hdr_na))))
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "header na > MAX_STEPS rejected")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "na-overflow error code")
+cmd(C.CMD_RESET)
+
+-- step time above the 1-hour cap rejected (otherwise-valid table, good CRC)
+load_table({ steps = { { 3600001, SAFE } }, abort = {}, guard = 0, mask = 0 })
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "step t > 3600000 ms rejected")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "time-cap error code")
+cmd(C.CMD_RESET)
+
+-- L5: LOAD while not IDLE is refused but must drain + free the FIFO
+local held_crc = load_table(STD)
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "loaded for not-idle LOAD test")
+fifo_head, fifo_tail = 1, 0
+push_fifo_bytes((build_table(STD)))
+setreg(C.ADDR_FIFO_ALLOCATE, C.ALLOCATE_BYTES)
+cmd(C.CMD_LOAD)
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "LOAD outside IDLE refused (state unchanged)")
+check(fifo_bytes() == 0, "LOAD outside IDLE drains the FIFO")
+check(getreg(C.ADDR_FIFO_ALLOCATE) == 0, "LOAD outside IDLE frees the FIFO allocation")
+check(getreg(C.ADDR_CRC16) == held_crc, "refused LOAD leaves loaded table identity intact")
+cmd(C.CMD_RESET)
+
+-- M6: RESET from ARMED is a clean stand-down: safe word + IDLE, no abort
+local SAFE5 = 0x0005
+load_table({
+  steps = { { 0, 0x0001 }, { 20, SAFE5 } },
+  abort = { { 0, SAFE5 } },
+  guard = 2000, mask = 0x0040, safe = SAFE5,
+})
+do_arm(500)
+check(getreg(C.ADDR_STATE) == C.ST_ARMED, "armed for stand-down test")
+local pre_reset = #dio_writes
+cmd(C.CMD_RESET)
+check(getreg(C.ADDR_STATE) == C.ST_IDLE, "RESET from ARMED -> IDLE (clean stand-down)")
+check(#dio_writes == pre_reset + 1 and dio_writes[#dio_writes].value == SAFE5,
+  "stand-down applies the safe word")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_NONE, "stand-down leaves no error")
+
+-- M11: ABORT in DONE drives the safe word and lands in ABORTED
+load_table({
+  steps = { { 0, 0x0001 }, { 10, SAFE5 } },
+  abort = { { 0, SAFE5 } },
+  guard = 2000, mask = 0x0040, safe = SAFE5,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+step(15)
+check(getreg(C.ADDR_STATE) == C.ST_DONE, "ran to DONE for late-abort test")
+local pre_late = #dio_writes
+cmd(C.CMD_ABORT)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "ABORT in DONE -> ABORTED")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "ABORT in DONE error code")
+check(#dio_writes == pre_late + 1 and dio_writes[#dio_writes].value == SAFE5,
+  "ABORT in DONE drives the safe word")
+cmd(C.CMD_RESET)
+
+-- H6: overrun (stall > 250 ms) while RUNNING starts an OVERRUN abort AND the
+-- rest of the catch-up batch is dropped so abort steps pace in real time
+load_table({
+  steps = { { 0, 0x0001 }, { 5000, SAFE } },
+  abort = { { 0, 0x0002 }, { 40, SAFE } },
+  guard = 2000, mask = 0x0040,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+step(5); beat()
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "running before overrun stall")
+local pre_stall = #dio_writes
+step(300) -- single stalled batch > 250 ticks
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING, "overrun -> ABORTING, backlog dropped (not collapsed to ABORTED)")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_OVERRUN, "overrun error code")
+check(#dio_writes == pre_stall + 1 and dio_writes[#dio_writes].value == 0x0002,
+  "exactly one abort tick ran inside the overrun batch")
+for i = 1, 45 do step(1) end -- abort step@40 at real-time pacing
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "overrun abort completes")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_OVERRUN, "overrun code preserved to ABORTED")
+check(dio_writes[#dio_writes].value == SAFE, "overrun abort ends safe")
+cmd(C.CMD_RESET)
+
+-- H6 regression: a stall while ALREADY ABORTING must not restart the abort
+-- table and must not overwrite the original abort reason with OVERRUN
+load_table({
+  steps = { { 0, 0x0001 }, { 5000, SAFE } },
+  abort = { { 0, 0x0002 }, { 500, SAFE } },
+  guard = 2000, mask = 0x0040,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+step(20); beat()
+cmd(C.CMD_ABORT)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING, "staged host abort in progress")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "host abort reason recorded")
+check(dio_writes[#dio_writes].value == 0x0002, "abort step 1 applied once")
+local pre_abort_stall = #dio_writes
+step(300) -- stall DURING the abort: > 250 ticks in one batch
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING, "stall during ABORTING does not restart or finish the abort")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT,
+  "stall during ABORTING preserves the original error code (no OVERRUN overwrite)")
+check(#dio_writes == pre_abort_stall, "no abort words replayed during the stall")
+check(getreg(C.ADDR_CUR_STEP) == 2, "abort step index not reset by the stall")
+step(300) -- reach step@500
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "staged abort completes after the stall")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "host-abort code survives to ABORTED")
+check(dio_writes[#dio_writes].value == SAFE, "staged abort ends safe")
+cmd(C.CMD_RESET)
+
+-- L6: the x>1000 tick clamp must not hide elapsed time from the ARMED
+-- heartbeat age -- a 5 s stall with a 3 s timeout must still abort
+load_table(STD)
+do_arm(3000)
+check(getreg(C.ADDR_STATE) == C.ST_ARMED, "armed for clamp test")
+step(5000) -- clamped to 1000 processed ticks; full 5000 ms must count as age
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING, "clamped stall still detects heartbeat loss (L6)")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HB_TIMEOUT, "clamped-stall error code")
+for i = 1, 30 do step(1) end
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "clamped-stall abort completes")
+check(dio_writes[#dio_writes].value == SAFE, "clamped-stall abort ends safe")
+cmd(C.CMD_RESET)
+
+-- L7: spark guard stays active during ABORTING on the commanded word; a trip
+-- forces the bit low but neither restarts the abort nor changes its reason
+load_table({
+  steps = { { 0, 0x0001 }, { 5000, SAFE } },
+  abort = { { 0, 0x0041 }, { 400, SAFE } }, -- abort word energizes the spark bit
+  guard = 100, mask = 0x0040,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+step(10); beat()
+cmd(C.CMD_ABORT)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING, "aborting with spark-energizing abort word")
+check(spark_bit(dio_writes[#dio_writes].value), "abort word set the spark bit")
+for i = 1, 99 do step(1) end -- just below the 100 ms max-on
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "pre-trip error code intact")
+local pre_trip = #dio_writes
+for i = 1, 5 do step(1) end -- crosses the max-on threshold
+check(#dio_writes == pre_trip + 1 and dio_writes[#dio_writes].value == 0x0001,
+  "spark bit forced low during ABORTING (0x0041 -> 0x0001)")
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING, "guard trip does not restart or exit the abort")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "guard trip during ABORTING preserves the error code")
+step(500)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "abort completes after spark force-low")
+check(dio_writes[#dio_writes].value == SAFE, "spark-abort scenario ends safe")
 cmd(C.CMD_RESET)
 
 -- full §5 capacity: 128 main + 128 abort steps must LOAD and run (the old
@@ -426,4 +659,4 @@ check(getreg(C.ADDR_STATE) == C.ST_DONE, "full-capacity table runs to DONE")
 check(dio_writes[#dio_writes].value == SAFE, "full-capacity table ends safe")
 cmd(C.CMD_RESET)
 
-print(string.format("lua sequencer: %d/%d checks OK (real sequencer.lua executed)", checks, checks))
+print(string.format("lua sequencer: %d/%d checks OK (%s executed)", checks, checks, SEQ_PATH))

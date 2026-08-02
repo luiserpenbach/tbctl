@@ -426,6 +426,42 @@ button.btn.confirm {
 }
 .alarm-banner.active { animation: pulse 0.8s infinite; }
 
+/* M26: initial-load failure banner (channels/dashboards fetch) */
+.init-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--amber) 18%, var(--bg));
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--amber);
+}
+
+/* M27: full-screen visual fallback when the abort chime can't play */
+.abort-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 min(18vw, 110px) var(--mono);
+  letter-spacing: 0.22em;
+  text-indent: 0.22em;
+  color: #fff;
+  background: color-mix(in srgb, var(--red) 45%, transparent);
+  text-shadow: 0 0 24px var(--red);
+  pointer-events: none;
+  animation: abort-flash-blink 0.5s step-start 12;
+}
+@keyframes abort-flash-blink {
+  50% { opacity: 0.15; }
+}
+
 /* event feed */
 .event-feed {
   border-top: 1px solid var(--border);
@@ -540,7 +576,7 @@ button.btn.confirm {
 }
 
 /* extras */
-tr.stale, .pid-sensor.stale { opacity: 0.35; }
+tr.stale, .pid-sensor.stale, .chan .val.stale { opacity: 0.35; }
 .pid-sensor.stale { border-style: dashed; }
 .checklist-item {
   display: flex;

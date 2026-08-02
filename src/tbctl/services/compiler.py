@@ -22,7 +22,7 @@ from tbctl.config.models import (
     dio_number,
 )
 from tbctl.hw.registers_gen import MIN_STEP_SPACING_MS
-from tbctl.seqtable import Step, StepTable
+from tbctl.seqtable import Step, StepTable, TableFormatError
 
 
 class CompileError(Exception):
@@ -103,6 +103,12 @@ def _max_spark_on_ms(steps: list[Step], end_ms: int, spark_mask: int) -> int:
 
 
 def compile_sequence(seq: Sequence, chmap: ChannelMap) -> CompiledSequence:
+    """Compile a validated Sequence against a ChannelMap.
+
+    Raises CompileError on every failure mode, including wire-format limits
+    (TableFormatError from seqtable is wrapped) so callers get one exception
+    type — the REST layer maps CompileError to HTTP 422.
+    """
     errors = list(cross_validate_sequence(seq, chmap))
     if errors:
         raise CompileError(errors)
@@ -110,8 +116,11 @@ def compile_sequence(seq: Sequence, chmap: ChannelMap) -> CompiledSequence:
     safe_word = chmap.safe_word()
     warnings: list[str] = []
 
-    main = _expand(seq.steps, chmap, safe_word, "steps", errors)
-    abort = _expand(seq.abort, chmap, safe_word, "abort", errors)
+    try:
+        main = _expand(seq.steps, chmap, safe_word, "steps", errors)
+        abort = _expand(seq.abort, chmap, safe_word, "abort", errors)
+    except TableFormatError as e:
+        raise CompileError([*errors, f"table format: {e}"]) from e
     if errors:
         raise CompileError(errors)
 
@@ -157,12 +166,15 @@ def compile_sequence(seq: Sequence, chmap: ChannelMap) -> CompiledSequence:
     if errors:
         raise CompileError(errors)
 
-    table = StepTable(
-        dio_inhibit=chmap.dio_inhibit(),
-        safe_word=safe_word,
-        spark_guard_ms=spark_guard_ms,
-        spark_mask=spark_mask,
-        steps=tuple(main),
-        abort=tuple(abort),
-    )
+    try:
+        table = StepTable(
+            dio_inhibit=chmap.dio_inhibit(),
+            safe_word=safe_word,
+            spark_guard_ms=spark_guard_ms,
+            spark_mask=spark_mask,
+            steps=tuple(main),
+            abort=tuple(abort),
+        )
+    except TableFormatError as e:
+        raise CompileError([f"table format: {e}"]) from e
     return CompiledSequence(seq.name, table, duration_ms, abort_duration_ms, warnings)

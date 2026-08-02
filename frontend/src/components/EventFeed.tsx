@@ -19,7 +19,21 @@ export function EventFeed() {
 
   useEffect(() => {
     fetchEvents(50)
-      .then((r) => setEvents(r.events))
+      .then((r) => {
+        // merge with WS events pushed before/while the fetch was in flight —
+        // replacing outright would drop them
+        const live = useStore.getState().events;
+        const seen = new Set<string>();
+        const merged = [...live, ...r.events]
+          .filter((e) => {
+            const k = `${e.time}|${e.event}`;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          .sort((a, b) => b.time - a.time);
+        setEvents(merged);
+      })
       .catch(() => {});
   }, [setEvents]);
 

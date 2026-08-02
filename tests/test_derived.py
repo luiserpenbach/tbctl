@@ -58,6 +58,20 @@ def test_expr_refs_dedupe():
     assert expr_refs("a.x + a.x * a.y") == ["a.x", "a.y"]
 
 
+def test_expr_rejects_bool_constants():
+    """L16: bool is an int subclass — `a.x + True` must not evaluate."""
+    for bad in ("a.x + True", "False * a.x", "max(a.x, True)"):
+        with pytest.raises(ExprError, match="numeric constants"):
+            compile_expr(bad)
+
+
+def test_expr_syntax_error_mentions_tag_grammar():
+    """L16: legal tags like temp.2nd can never appear in an expression; the
+    error must say why instead of a bare 'invalid syntax'."""
+    with pytest.raises(ExprError, match="dotted Python names"):
+        compile_expr("temp.2nd + 1")
+
+
 # --------------------------------------------------------------------- model
 
 
@@ -179,7 +193,9 @@ async def test_derived_acquisition_cross_group(tmp_path):
         await acq.stop()
 
     vals = acq.latest_values()
-    assert vals["calc.sum"] == pytest.approx(13.0, abs=0.1)
+    # the mock adds a deterministic 1% sine wobble per channel: calc.sum can
+    # legitimately swing 13.0 +/- 0.13 depending on wall-clock phase
+    assert vals["calc.sum"] == pytest.approx(13.0, abs=0.2)
     assert vals["calc.slow_double"] == pytest.approx(6.0, abs=0.1)
     # live_window resolves derived tags too
     win = acq.live_window(["calc.sum"], 10.0)

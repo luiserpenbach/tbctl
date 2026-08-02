@@ -6,7 +6,10 @@ from pydantic import ValidationError
 from tbctl.config.models import (
     ChannelMap,
     Dashboard,
+    ReviewConfig,
     Sequence,
+    cross_validate_dashboard,
+    cross_validate_review,
     cross_validate_sequence,
     dio_number,
 )
@@ -94,9 +97,15 @@ def test_more_than_16_outputs_rejected():
         {"tag": f"valve.v{i}", "hw": hw, "kind": "valve", "fail_safe": "closed"}
         for i, hw in enumerate([f"FIO{j}" for j in range(8)] + [f"EIO{j}" for j in range(8)])
     ]
-    chmap(valves)  # exactly 16 is fine
+    chmap([AIN, *valves])  # exactly 16 is fine
     with pytest.raises(ValidationError):
-        chmap([*valves, {"tag": "valve.v16", "hw": "CIO0", "kind": "valve", "fail_safe": "closed"}])
+        chmap(
+            [
+                AIN,
+                *valves,
+                {"tag": "valve.v16", "hw": "CIO0", "kind": "valve", "fail_safe": "closed"},
+            ]
+        )
 
 
 def test_unknown_rate_group_rejected():
@@ -130,6 +139,7 @@ def test_safe_word_and_polarity():
     # NC vent that fails open with open_state high would be safe level 1
     m = chmap(
         [
+            AIN,  # maps need >=1 input; AINs have no DIO bit
             VALVE,  # FIO0, fail closed, open high -> safe 0
             {
                 "tag": "valve.vent",
@@ -154,10 +164,56 @@ def test_safe_word_and_polarity():
 
 
 def test_bit_index_by_dio_number():
-    m = chmap([{**VALVE, "hw": "EIO2"}, SPARK])
+    m = chmap([AIN, {**VALVE, "hw": "EIO2"}, SPARK])
     assert m.bit_index("valve.ox_main") == 10
     assert m.bit_index("spark.igniter") == 6
     assert [c.tag for c in m.outputs()] == ["spark.igniter", "valve.ox_main"]
+
+
+def test_at_least_one_input_channel_required():
+    """C5/L15: output-only maps would fail at eStreamStart, not validation."""
+    with pytest.raises(ValidationError, match="at least one input channel"):
+        chmap([VALVE, SPARK])
+
+
+def test_rate_group_divisibility():
+    """C5: mirror of AcquisitionService._configure — a used group whose rate
+    does not integer-divide the stream (fastest used) rate must not validate,
+    or hot-apply/startup crashes after the file is already persisted."""
+    with pytest.raises(ValidationError, match="must divide stream rate"):
+        chmap(
+            [AIN, {**AIN, "tag": "pressure.odd", "hw": "AIN1", "rate_group": "odd"}],
+            rate_groups={"default": {"rate_hz": 50}, "odd": {"rate_hz": 7}},
+        )
+    # exactly the report's reproducer: an unused-but-declared odd group is
+    # fine only if no channel lands in it...
+    m = chmap([AIN], rate_groups={"default": {"rate_hz": 50}, "odd": {"rate_hz": 7}})
+    assert m.rate_groups["odd"].rate_hz == 7
+    # ...and integer decimation passes
+    m = chmap(
+        [AIN, {**AIN, "tag": "pressure.fast", "hw": "AIN1", "rate_group": "fast"}],
+        rate_groups={"default": {"rate_hz": 50}, "fast": {"rate_hz": 1000}},
+    )
+    assert m.rate_groups["fast"].rate_hz == 1000
+
+
+def test_thermocouple_ain_capped():
+    """M21: AIN9999 must not pass validation and fail at stream start."""
+    tc = {"tag": "temp.t1", "hw": "AIN48", "kind": "thermocouple_k"}
+    chmap([{**AIN}, tc])
+    with pytest.raises(ValidationError, match=r"AIN0\.\.AIN127"):
+        chmap([AIN, {**tc, "hw": "AIN9999"}])
+    with pytest.raises(ValidationError, match=r"AIN0\.\.AIN127"):
+        chmap([AIN, {**tc, "hw": "AIN128"}])
+
+
+def test_analog_range_constrained_to_ljm_set():
+    """L17: LJM silently coerces anything outside {10, 1, 0.1, 0.01} V."""
+    for ok in (10.0, 1.0, 0.1, 0.01):
+        chmap([{**AIN, "range": ok}])
+    for bad in (5.0, 0.2, 0.0, -10.0, 100.0):
+        with pytest.raises(ValidationError, match="range must be one of"):
+            chmap([{**AIN, "range": bad}])
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +276,54 @@ def test_abort_required():
         )
 
 
+def test_abort_must_start_at_t_zero():
+    """M12: any positive first abort time is added latency with the engine
+    still in its firing state."""
+    with pytest.raises(ValidationError, match="abort: first step must be at t=0"):
+        seq(
+            [{"t": 0.0, "set": {"a.b": "open"}}],
+            abort=[{"t": 0.5, "set": {"a.b": "close"}}],
+        )
+    seq(  # t=0 first step is fine
+        [{"t": 0.0, "set": {"a.b": "open"}}],
+        abort=[{"t": 0.0, "set": {"a.b": "close"}}, {"t": 1.0, "set": {"a.b": "close"}}],
+    )
+
+
+def test_step_time_one_hour_cap():
+    """M16: the Lua rejects t > 3600 s (BAD_TABLE); mirror it host-side on
+    BOTH tables so it can never surface as a device fault or a 500."""
+    # abort table (previously completely unbounded)
+    with pytest.raises(ValidationError, match="1 h"):
+        seq(
+            [{"t": 0.0, "set": {"a.b": "open"}}],
+            abort=[{"t": 0.0, "set": {"a.b": "close"}}, {"t": 5e6, "set": {"a.b": "close"}}],
+        )
+    with pytest.raises(ValidationError, match="1 h"):
+        seq(
+            [{"t": 0.0, "set": {"a.b": "open"}}],
+            abort=[{"t": 0.0, "set": {"a.b": "close"}}, {"t": 3601.0, "set": {"a.b": "close"}}],
+        )
+    # main table: max_duration_s (<=600) already binds tighter, but the cap
+    # must hold even without it
+    with pytest.raises(ValidationError):
+        seq([{"t": 4000.0, "set": {"a.b": "open"}}])
+    # exactly 3600 s in the abort table is allowed
+    seq(
+        [{"t": 0.0, "set": {"a.b": "open"}}],
+        abort=[{"t": 0.0, "set": {"a.b": "close"}}, {"t": 3600.0, "set": {"a.b": "close"}}],
+    )
+
+
+def test_wire_limits_come_from_generated_constants():
+    """F2: models must not hardcode the wire-format limits."""
+    from tbctl.config import models
+    from tbctl.hw import registers_gen
+
+    assert models.MAX_STEPS is registers_gen.MAX_STEPS
+    assert models.MIN_STEP_SPACING_S == registers_gen.MIN_STEP_SPACING_MS / 1000.0
+
+
 def test_precondition_needs_bound():
     with pytest.raises(ValidationError, match="min and/or max"):
         seq([{"t": 0.0, "set": {"a.b": "open"}}], preconditions=[{"tag": "pressure.x"}])
@@ -254,6 +358,104 @@ def test_cross_validation():
     )
     errors = cross_validate_sequence(bad, m)
     assert len(errors) == 4  # unknown tag, input as output, bad spark value, output as precondition
+
+
+# --------------------------------------------------- TableCal limit sanity
+
+
+TABLE_CAL_AIN = {
+    **AIN,
+    "cal": {"kind": "table", "x": [0.0, 5.0], "y": [0.0, 20.0]},  # clamps to 0..20
+}
+
+
+def test_redline_outside_tablecal_range_rejected():
+    """M19: np.interp clamps to the table's y-range, so a limit at/outside
+    that range is a redline that can physically never trip."""
+    m = chmap([TABLE_CAL_AIN, VALVE])
+    steps = [
+        {"t": 0.0, "set": {"valve.ox_main": "open"}},
+        {"t": 1.0, "set": {"valve.ox_main": "close"}},
+    ]
+
+    # the report's exact case: cal tops out at 20, redline max 22 is dead
+    dead = seq(steps, redlines=[{"tag": "pressure.chamber", "max": 22.0}])
+    errors = cross_validate_sequence(dead, m)
+    assert len(errors) == 1 and "representable range" in errors[0]
+
+    # max exactly at the clamp ceiling can also never trip (v > 20 impossible)
+    assert cross_validate_sequence(
+        seq(steps, redlines=[{"tag": "pressure.chamber", "max": 20.0}]), m
+    )
+    # min at/below the clamp floor is equally dead
+    assert cross_validate_sequence(
+        seq(steps, redlines=[{"tag": "pressure.chamber", "min": 0.0}]), m
+    )
+    assert cross_validate_sequence(
+        seq(steps, redlines=[{"tag": "pressure.chamber", "min": -5.0}]), m
+    )
+    # in-range limits are fine
+    assert (
+        cross_validate_sequence(
+            seq(steps, redlines=[{"tag": "pressure.chamber", "min": 0.5, "max": 18.0}]), m
+        )
+        == []
+    )
+    # non-table cals are not range-checked
+    m_lin = chmap([AIN, VALVE])
+    assert (
+        cross_validate_sequence(
+            seq(steps, redlines=[{"tag": "pressure.chamber", "max": 1e9}]), m_lin
+        )
+        == []
+    )
+
+
+def test_precondition_outside_tablecal_range_rejected():
+    m = chmap([TABLE_CAL_AIN, VALVE])
+    steps = [
+        {"t": 0.0, "set": {"valve.ox_main": "open"}},
+        {"t": 1.0, "set": {"valve.ox_main": "close"}},
+    ]
+    errors = cross_validate_sequence(
+        seq(steps, preconditions=[{"tag": "pressure.chamber", "min": 25.0}]), m
+    )
+    assert len(errors) == 1 and "preconditions[0]" in errors[0]
+    assert (
+        cross_validate_sequence(
+            seq(steps, preconditions=[{"tag": "pressure.chamber", "min": 5.0}]), m
+        )
+        == []
+    )
+
+
+# ---------------------------------------------------------------------------
+# review rules
+# ---------------------------------------------------------------------------
+
+
+def test_review_sequence_scoping_validated():
+    """M20: a rule scoped to a renamed/nonexistent sequence silently never
+    runs; with the sequence set known it must be an error."""
+    m = chmap([AIN, VALVE])
+    cfg = ReviewConfig.model_validate(
+        {
+            "rules": [
+                {
+                    "name": "pc_peak",
+                    "tag": "pressure.chamber",
+                    "metric": "max",
+                    "limit_max": 25.0,
+                    "sequences": ["hotfire_v1"],
+                }
+            ]
+        }
+    )
+    assert cross_validate_review(cfg, m, sequence_names={"hotfire_v1", "coldflow_v1"}) == []
+    errors = cross_validate_review(cfg, m, sequence_names={"coldflow_v1"})
+    assert len(errors) == 1 and "unknown sequence 'hotfire_v1'" in errors[0]
+    # without the sequence set (channel-only callers) scoping is not checked
+    assert cross_validate_review(cfg, m) == []
 
 
 # ---------------------------------------------------------------------------
@@ -313,3 +515,61 @@ def test_manual_y_axis_needs_bounds():
                 ],
             }
         )
+
+
+def _panel(**kw) -> dict:
+    return {"id": "p1", "type": "timeseries", "x": 0, "y": 0, "w": 4, "h": 4, **kw}
+
+
+def test_manual_y_axis_min_lt_max():
+    """L17: manual y-axis with min >= max blanks the chart."""
+    with pytest.raises(ValidationError, match="min < max"):
+        Dashboard.model_validate(
+            {"name": "d", "panels": [_panel(y_axis={"mode": "manual", "min": 5.0, "max": 5.0})]}
+        )
+    Dashboard.model_validate(
+        {"name": "d", "panels": [_panel(y_axis={"mode": "manual", "min": 0.0, "max": 5.0})]}
+    )
+
+
+def test_pid_sensor_warn_bounds_ordered():
+    """L17: warn_min >= warn_max is a nonsensical warning band."""
+    from tbctl.config.models import PidConfig
+
+    el = {"id": "s1", "type": "sensor", "channel": "pressure.chamber", "x": 0.5, "y": 0.5}
+    with pytest.raises(ValidationError, match="warn_min must be < warn_max"):
+        PidConfig.model_validate(
+            {"name": "p", "elements": [{**el, "warn_min": 10.0, "warn_max": 1.0}]}
+        )
+    PidConfig.model_validate({"name": "p", "elements": [{**el, "warn_min": 1.0, "warn_max": 10.0}]})
+
+
+def test_dashboard_cross_validation():
+    """L17: literal panel tags must exist in the channel map; `pid` panels
+    must reference an existing P&ID config; glob patterns are skipped."""
+    m = chmap([AIN, VALVE, SPARK])
+    d = Dashboard.model_validate(
+        {
+            "name": "d",
+            "panels": [
+                _panel(channels=["pressure.chamber", "valve.ox_main"]),
+                {**_panel(), "id": "p2", "type": "value_table", "channels": ["pressure.*"]},
+            ],
+        }
+    )
+    assert cross_validate_dashboard(d, m) == []
+
+    bad = Dashboard.model_validate({"name": "d", "panels": [_panel(channels=["pressure.nope"])]})
+    errors = cross_validate_dashboard(bad, m)
+    assert len(errors) == 1 and "pressure.nope" in errors[0]
+
+    pid_panel = Dashboard.model_validate(
+        {"name": "d", "panels": [{**_panel(), "type": "pid", "pid": "feed"}]}
+    )
+    assert cross_validate_dashboard(pid_panel, m, pid_names={"feed"}) == []
+    errors = cross_validate_dashboard(pid_panel, m, pid_names={"other"})
+    assert len(errors) == 1 and "unknown pid config 'feed'" in errors[0]
+
+    no_pid = Dashboard.model_validate({"name": "d", "panels": [{**_panel(), "type": "pid"}]})
+    errors = cross_validate_dashboard(no_pid, m, pid_names=set())
+    assert len(errors) == 1 and "needs a `pid:` config name" in errors[0]

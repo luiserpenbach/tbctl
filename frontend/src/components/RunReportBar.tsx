@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchRunReport, fetchRuns, patchRunMeta, rerunRunReport, type RunReport } from "../api";
 import { useStore } from "../store";
 
@@ -8,7 +8,7 @@ const OUTCOMES = ["good", "anomaly", "scrub"] as const;
 // selected run, shown while reviewing it. Rules live in configs/review.yaml.
 
 function fmtVal(v: number | null): string {
-  if (v === null) return "—";
+  if (v === null || !Number.isFinite(v)) return "—"; // never render "NaN"
   const a = Math.abs(v);
   return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2);
 }
@@ -16,7 +16,8 @@ function fmtVal(v: number | null): string {
 function limitText(r: { limit_min: number | null; limit_max: number | null }): string {
   if (r.limit_min !== null && r.limit_max !== null) return `${r.limit_min}…${r.limit_max}`;
   if (r.limit_max !== null) return `≤ ${r.limit_max}`;
-  return `≥ ${r.limit_min}`;
+  if (r.limit_min !== null) return `≥ ${r.limit_min}`;
+  return "—"; // both null: never show "≥ null"
 }
 
 export function RunReportBar() {
@@ -26,6 +27,9 @@ export function RunReportBar() {
   const [report, setReport] = useState<RunReport | null>(null);
   const [msg, setMsg] = useState("");
   const [tagText, setTagText] = useState("");
+  // last successfully-saved (or loaded) normalized tag list — blur on an
+  // unchanged field, and the blur following an Enter, must not re-PATCH
+  const savedTagsRef = useRef("");
   const runId = viewMode.mode === "run" ? viewMode.run.run_id : null;
   const run = viewMode.mode === "run" ? viewMode.run : null;
 
@@ -33,10 +37,19 @@ export function RunReportBar() {
     setReport(null);
     setMsg("");
     setTagText(run?.tags?.join(", ") ?? "");
-    if (runId)
-      fetchRunReport(runId)
-        .then((r) => setReport(r.report))
-        .catch((e) => setMsg(String(e)));
+    savedTagsRef.current = (run?.tags ?? []).map((t) => t.trim()).filter(Boolean).join(",");
+    if (!runId) return;
+    let cancelled = false; // stale-guard (M22): late report from a previous run
+    fetchRunReport(runId)
+      .then((r) => {
+        if (!cancelled) setReport(r.report);
+      })
+      .catch((e) => {
+        if (!cancelled) setMsg(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
@@ -52,6 +65,25 @@ export function RunReportBar() {
         if (fresh) setViewMode({ mode: "run", run: fresh });
       })
       .catch((e) => setMsg(String(e).replace(/^Error: /, "")));
+
+  const commitTags = () => {
+    const tags = tagText.split(",").map((t) => t.trim()).filter(Boolean);
+    const key = tags.join(",");
+    if (key === savedTagsRef.current) return; // unchanged blur / Enter+blur double-fire
+    const prev = savedTagsRef.current;
+    savedTagsRef.current = key;
+    patchRunMeta(runId, { tags })
+      .then(async () => {
+        const runs = (await fetchRuns()).runs;
+        setRuns(runs);
+        const fresh = runs.find((r) => r.run_id === runId);
+        if (fresh) setViewMode({ mode: "run", run: fresh });
+      })
+      .catch((e) => {
+        savedTagsRef.current = prev; // allow a retry after a failed save
+        setMsg(String(e).replace(/^Error: /, ""));
+      });
+  };
 
   const rerun = () =>
     rerunRunReport(runId)
@@ -111,11 +143,8 @@ export function RunReportBar() {
         placeholder="tags, comma separated"
         value={tagText}
         onChange={(e) => setTagText(e.target.value)}
-        onBlur={() => saveMeta({ tags: tagText.split(",").map((t) => t.trim()).filter(Boolean) })}
-        onKeyDown={(e) =>
-          e.key === "Enter" &&
-          saveMeta({ tags: tagText.split(",").map((t) => t.trim()).filter(Boolean) })
-        }
+        onBlur={commitTags}
+        onKeyDown={(e) => e.key === "Enter" && commitTags()}
       />
       <button
         className="btn"

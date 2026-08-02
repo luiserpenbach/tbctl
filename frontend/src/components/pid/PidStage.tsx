@@ -200,7 +200,7 @@ export function PidStage({
               title={el.channel}
               style={{ left: cx, top: cy }}
             >
-              {v === null ? "—" : v.toFixed(el.decimals ?? 1)}
+              {v === null || !Number.isFinite(v) ? "—" : v.toFixed(el.decimals ?? 1)}
               <span className="pid-unit">{unitOf?.(el.channel) ?? ""}</span>
             </div>
           );

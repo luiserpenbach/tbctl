@@ -9,9 +9,13 @@ import { PidStage } from "../pid/PidStage";
 // the existing /api/manual/valve with the same gating as the valve panel
 // (control mode + sequencer IDLE) behind a click-to-confirm popover.
 
+// dio_state older than this is not trusted for valve rendering/gating (M28)
+const SEQ_FRESH_MS = 2500;
+
 export function PidPanel({ panel }: { panel: PanelConfig }) {
   const status = useStore((s) => s.status);
   const seq = useStore((s) => s.seqStatus);
+  const lastSeqStatusAt = useStore((s) => s.lastSeqStatusAt);
   const channels = useStore((s) => s.channels);
   const [cfg, setCfg] = useState<PidConfigT | null>(null);
   const [err, setErr] = useState("");
@@ -40,14 +44,16 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
   if (err) return <div className="placeholder">{err}</div>;
   if (!cfg || !status) return <div className="placeholder">loading…</div>;
 
-  const seqState = seq?.state ?? status.sequencer.state;
+  // M28: only trust the 10 Hz WS dio_state while it is actually fresh —
+  // during a WS outage fall back to the 2 s REST status poll
+  const seqFresh = seq !== null && Date.now() - lastSeqStatusAt < SEQ_FRESH_MS;
+  const seqState = seqFresh && seq ? seq.state : status.sequencer.state;
   const canActuate = status.control_enabled && seqState === "IDLE";
 
-  // prefer the 10 Hz WS dio_state over the 2 s status poll (same as valve_panel)
   const liveValve = (tag: string): boolean | null => {
     const c = byTag.get(tag);
     if (!c) return null;
-    if (seq && c.bit !== undefined && c.active_level !== undefined)
+    if (seqFresh && seq && c.bit !== undefined && c.active_level !== undefined)
       return ((seq.dio_state >> c.bit) & 1) === c.active_level;
     const s = status.outputs[tag];
     return s === undefined ? null : s === "open" || s === "on";
@@ -60,9 +66,19 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
     const action =
       c?.kind === "spark" ? (active ? "off" : "on") : active ? "close" : "open";
     if (pending?.id === el.id) {
+      // H11: send exactly what the popover displayed — and only if the
+      // gating and the computed action still match it
       setPending(null);
+      if (!canActuate) {
+        setErr("control locked — confirm cancelled");
+        return;
+      }
+      if (action !== pending.action) {
+        setErr(`valve state changed (${pending.action} → ${action}) — confirm cancelled`);
+        return;
+      }
       setErr("");
-      setManualValve(el.channel, action).catch((e) =>
+      setManualValve(el.channel, pending.action).catch((e) =>
         setErr(String(e).replace(/^Error: /, "")),
       );
     } else if (canActuate) {

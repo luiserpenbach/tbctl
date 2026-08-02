@@ -59,13 +59,20 @@ def compile_expr(expr: str) -> tuple[Callable[[dict], np.ndarray], list[str]]:
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError as e:
-        raise ExprError(f"syntax error: {e.msg}") from e
+        raise ExprError(
+            f"syntax error: {e.msg} — expressions are a small Python-expression "
+            "subset, so only channel tags that are valid dotted Python names can "
+            "be referenced (a tag segment starting with a digit, e.g. 'temp.2nd', "
+            "cannot appear in an expression)"
+        ) from e
 
     refs: list[str] = []
 
     def build(node: ast.expr) -> Callable[[dict], object]:
         if isinstance(node, ast.Constant):
-            if not isinstance(node.value, (int, float)):
+            # bool is a subclass of int — reject it explicitly so `a.x + True`
+            # cannot sneak past the numeric-constants-only contract
+            if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
                 raise ExprError(f"only numeric constants allowed, got {node.value!r}")
             val = float(node.value)
             return lambda env: val

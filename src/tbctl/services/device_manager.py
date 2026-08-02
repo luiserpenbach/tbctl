@@ -182,7 +182,30 @@ class DeviceManager:
         self.switched_at = time.time()
         with contextlib.suppress(Exception):
             old_backend.close()
+        # Switching onto real hardware must (re)arm the hardware watchdog for
+        # the current channel map's fail-safe image and re-verify the deployed
+        # interpreter — otherwise a node started in --sim and switched to a T7
+        # at runtime runs with layer-2 protection off / a stale safe image.
+        if mode != "sim":
+            await asyncio.to_thread(self._arm_hardware_safety)
         self._events.log("connection_switched", mode=mode, ip=self.ip)
+
+    def _arm_hardware_safety(self) -> None:
+        from tbctl.hw.registers_gen import INTERP_VERSION, REG_NAME
+        from tbctl.hw.watchdog import configure_watchdog
+
+        try:
+            configure_watchdog(self.device, self._chmap)
+        except Exception:
+            log.exception("failed to arm hardware watchdog after switch to %s", self.mode)
+        with contextlib.suppress(Exception):
+            v = int(self.device.read_name(REG_NAME["INTERP_VERSION"]))
+            if v != INTERP_VERSION:
+                log.warning(
+                    "interpreter version %d != expected %d after switch; deploy-lua required",
+                    v,
+                    INTERP_VERSION,
+                )
 
     def info(self) -> dict:
         """Connection detail for GET /api/connection (best-effort reads)."""

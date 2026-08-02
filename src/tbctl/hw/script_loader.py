@@ -22,55 +22,72 @@ import time
 from pathlib import Path
 
 from tbctl.hw.ljm_iface import DeviceInterface
-from tbctl.hw.registers_gen import INTERP_VERSION, REG_NAME
+from tbctl.hw.registers_gen import INTERP_VERSION, REG_ADDR, REG_NAME
 
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SEQUENCER_LUA = REPO_ROOT / "lua" / "sequencer.lua"
 
+# The purge script zeroes INTERP_VERSION so a stale value can never satisfy
+# the post-deploy version wait. Address comes from codegen (spec D10) -- never
+# hardcode a numeric Modbus address (bug-hunt F7).
 _PURGE_LUA = (
-    b"MB.W(46189,0,0)\n"
-    b"LJ.IntervalConfig(0,100)\n"
-    b"while true do if LJ.CheckInterval(0) then end end\n\x00"
-)
+    f"MB.W({REG_ADDR['INTERP_VERSION']},0,0)\n"
+    "LJ.IntervalConfig(0,100)\n"
+    "while true do if LJ.CheckInterval(0) then end end\n"
+).encode("ascii") + b"\x00"
 
 
 class ScriptLoadError(Exception):
     pass
 
 
+# Long-bracket openers ("[[", "[=[", "--[[", ...) start block comments or long
+# strings that a line-based pass cannot handle; minify_lua bails out on them.
+_LONG_BRACKET = re.compile(r"\[=*\[")
+
+
+def _cut_line_comment(line: str) -> str:
+    """Drop a trailing `--` comment, respecting single/double-quoted strings."""
+    quote: str | None = None
+    i, n = 0, len(line)
+    while i < n:
+        ch = line[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "-" and i + 1 < n and line[i + 1] == "-":
+            return line[:i]
+        i += 1
+    return line
+
+
 def minify_lua(source: str) -> str:
-    """Strip comments and collapse whitespace for T7 RAM limits."""
+    """Strip comments, indentation and blank lines for T7 RAM limits.
+
+    Deliberately conservative (bug-hunt F3): works line-by-line, never joins
+    lines or touches internal whitespace, and tracks quoted strings while
+    cutting `--` comments. It therefore cannot corrupt string literals, glue
+    tokens together, or turn `- -x` into a comment. Sources containing long
+    brackets (block comments / long strings, possibly multi-line) are returned
+    unmodified rather than risk mis-parsing them -- correctness of the
+    deployed artifact beats byte count.
+    """
+    if _LONG_BRACKET.search(source):
+        log.warning("minify_lua: long-bracket construct present; returning source unminified")
+        return source
     kept: list[str] = []
     for raw in source.splitlines():
-        line = raw.split("--", 1)[0].strip()
+        line = _cut_line_comment(raw).strip()
         if line:
             kept.append(line)
-    text = " ".join(kept)
-    text = re.sub(r"\s+", " ", text).strip()
-    # Tighten around punctuation; keep spaces that Lua keywords need.
-    text = re.sub(r"\s*([=+\-*/%<>~^,]|==|~=|<=|>=)\s*", r"\1", text)
-    text = re.sub(r"\s*([(){}\[\];])\s*", r"\1", text)
-    for kw in (
-        "local",
-        "function",
-        "return",
-        "if",
-        "then",
-        "else",
-        "elseif",
-        "end",
-        "for",
-        "do",
-        "while",
-        "not",
-        "and",
-        "or",
-        "in",
-    ):
-        text = re.sub(rf"\b{kw}\b", f" {kw} ", text)
-    return re.sub(r"\s+", " ", text).strip() + "\n"
+    return "\n".join(kept) + "\n"
 
 
 def stop_script(iface: DeviceInterface, timeout_s: float = 3.0) -> None:

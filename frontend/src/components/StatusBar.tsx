@@ -77,9 +77,13 @@ export function StatusBar() {
         className={`btn ${status?.control_enabled ? "danger-active" : ""}`}
         title="gates manual valves and ARM"
         onClick={() =>
-          setControlMode(!(status?.control_enabled ?? false)).then(() =>
-            fetchStatus().then((s) => useStore.getState().setStatus(s)),
-          )
+          setControlMode(!(status?.control_enabled ?? false))
+            .then(() => fetchStatus().then((s) => useStore.getState().setStatus(s)))
+            .catch((e) =>
+              // M26: a silent failure here leaves the operator believing the
+              // bench is (un)locked when it is not
+              alert(`control mode toggle failed: ${String(e).replace(/^Error: /, "")}`),
+            )
         }
       >
         {status?.control_enabled ? "Control on" : "Control off"}

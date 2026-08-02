@@ -230,7 +230,36 @@ def test_load_rejected_while_not_idle(rig):
     mock, _clock, chmap = rig
     upload_and_load(mock, table(chmap))
     assert state(mock) == SeqState.LOADED
-    # a second LOAD without RESET is ignored (fifo drains only on LOAD in IDLE)
+    # a second LOAD without RESET is refused (no transition) but now still
+    # drains+frees the FIFO so it can't stay allocated+full (L5)
     mock.write_name_array(REG_NAME["FIFO_DATA"], table(chmap).to_u16_words())
     mock.write_name(REG_NAME["CMD"], Cmd.LOAD)
     assert state(mock) == SeqState.LOADED
+    assert int(mock.read_name(REG_NAME["FIFO_BYTES_IN"])) == 0  # FIFO drained
+
+
+def test_reset_from_armed_is_clean_standdown(rig):
+    """RESET from ARMED returns to IDLE with the safe word, no abort (M6)."""
+    mock, clock, chmap = rig
+    upload_and_load(mock, table(chmap))
+    arm(mock, clock)
+    assert state(mock) == SeqState.ARMED
+    mock.write_name(REG_NAME["CMD"], Cmd.RESET)
+    assert state(mock) == SeqState.IDLE
+    assert error(mock) == SeqError.NONE
+    assert mock.dio_word16() == chmap.safe_word()
+
+
+def test_abort_from_done_drives_safe(rig):
+    """ABORT after DONE (e.g. allow_unsafe_end) drives safe and marks ABORTED (M11)."""
+    mock, clock, chmap = rig
+    upload_and_load(mock, table(chmap))
+    arm(mock, clock)
+    mock.write_name(REG_NAME["CMD"], Cmd.FIRE)
+    clock.advance(0.2)
+    beat(mock)
+    assert state(mock) == SeqState.DONE
+    mock.write_name(REG_NAME["CMD"], Cmd.ABORT)
+    assert state(mock) == SeqState.ABORTED
+    assert error(mock) == SeqError.HOST_ABORT
+    assert mock.dio_word16() == chmap.safe_word()

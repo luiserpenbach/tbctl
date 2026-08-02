@@ -140,21 +140,38 @@ export function PanelModal({
   if (!dashboard) return null;
 
   const save = () => {
+    // M25: an empty/garbled bound must never store NaN (blank chart, failed
+    // dashboard save — the backend requires finite min/max in manual mode)
+    const finiteOr = (s: string, fallback: number) => {
+      const v = parseFloat(s);
+      return Number.isFinite(v) ? v : fallback;
+    };
     const y_axis = {
       ...(yMode === "manual"
-        ? { mode: "manual" as const, min: parseFloat(yMin), max: parseFloat(yMax) }
+        ? {
+            mode: "manual" as const,
+            min: finiteOr(yMin, panel?.y_axis.min ?? 0),
+            max: finiteOr(yMax, panel?.y_axis.max ?? 10),
+          }
         : { mode: "auto" as const, min: null, max: null }),
       log: yLog,
       label: yLabel.trim() || null,
     };
     const pid = type === "pid" ? pidName || null : null;
+    // M25: never serialize sparse arrays ([null, tag] breaks the layout
+    // save); XY placeholders are "" and trailing blanks are trimmed
+    const chOut = [...channels];
+    if (type === "xy") {
+      for (let i = 0; i < 2; i++) if (chOut[i] === undefined) chOut[i] = "";
+      while (chOut.length && chOut[chOut.length - 1] === "") chOut.pop();
+    }
     const extras = {
       title: title.trim() || null,
       window_s: windowS ? parseFloat(windowS) : null,
       show_legend: showLegend,
     };
     if (panel) {
-      updatePanel(panel.id, { channels, y_axis, type, pid, ...extras });
+      updatePanel(panel.id, { channels: chOut, y_axis, type, pid, ...extras });
     } else {
       let n = 1;
       const ids = new Set(dashboard.panels.map((p) => p.id));
@@ -167,7 +184,7 @@ export function PanelModal({
         y: bottom,
         w: type === "timeseries" || type === "pid" ? 8 : 4,
         h: type === "timeseries" ? 7 : type === "pid" ? 9 : 5,
-        channels,
+        channels: chOut,
         y_axis,
         pid,
         ...extras,
@@ -212,9 +229,11 @@ export function PanelModal({
                 className="seq-select"
                 value={channels[axis] ?? ""}
                 onChange={(e) => {
-                  const next = [...channels];
+                  // fill with "" placeholders — picking Y before X must not
+                  // leave a hole that serializes as [null, tag] (M25)
+                  const next = [channels[0] ?? "", channels[1] ?? ""];
                   next[axis] = e.target.value;
-                  setChannels(next.slice(0, 2));
+                  setChannels(next);
                 }}
               >
                 <option value="">{axis === 0 ? "x channel…" : "y channel…"}</option>

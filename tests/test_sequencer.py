@@ -128,8 +128,10 @@ async def node(tmp_path):
     from tbctl.node import build_context
 
     ctx = build_context(CONFIGS, sim=True, data_dir=tmp_path / "runs", log_dir=tmp_path / "logs")
-    # fast heartbeat timeout so loss tests run quickly
-    ctx.sequencer._hb_timeout_ms = 150
+    # fast heartbeat timeout so loss tests run quickly, but with enough margin
+    # that an event-loop stall on a loaded CI runner doesn't spuriously abort a
+    # happy-path test (loss tests wait >=0.4 s, well past this)
+    ctx.sequencer._hb_timeout_ms = 300
     ctx.iface.open()
     await ctx.acq.start()
     yield ctx
@@ -190,7 +192,7 @@ async def test_happy_path_end_to_end(node):
     await ctx.sequencer.arm("quick", control_enabled=True)
     assert ctx.sequencer.state() == SeqState.ARMED
 
-    await ctx.sequencer.fire("quick")
+    await ctx.sequencer.fire("quick", control_enabled=True)
     await _await_state(ctx, SeqState.DONE)
     assert ctx.iface.dio_word16() == ctx.bundle.channels.model.safe_word()
 
@@ -237,7 +239,7 @@ async def test_abort_mid_run(node):
     await asyncio.sleep(0.3)
     await ctx.sequencer.load("quick")
     await ctx.sequencer.arm("quick", control_enabled=True)
-    await ctx.sequencer.fire("quick")
+    await ctx.sequencer.fire("quick", control_enabled=True)
     await asyncio.sleep(0.1)
     await ctx.sequencer.abort()
     await _await_state(ctx, SeqState.ABORTED)
@@ -258,7 +260,7 @@ async def test_heartbeat_loss_aborts_autonomously(node):
     await asyncio.sleep(0.3)
     await ctx.sequencer.load("quick")
     await ctx.sequencer.arm("quick", control_enabled=True)
-    await ctx.sequencer.fire("quick")
+    await ctx.sequencer.fire("quick", control_enabled=True)
     # kill the host heartbeat: the "Lua" must abort on its own
     await ctx.sequencer._heartbeat.stop()
     await asyncio.sleep(0.4)  # > 150 ms timeout

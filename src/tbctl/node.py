@@ -58,6 +58,10 @@ class NodeContext:
     data_dir: Path = field(default_factory=lambda: Path("data/runs"))
     # active pre-test checklist: {"name": str, "items": [str], "checked": [bool]}
     checklist: dict | None = None
+    # serializes device-lifecycle operations (connection switch, lua deploy,
+    # channel hot-apply, run start/stop) so their check-then-act guards can't
+    # interleave across awaits and corrupt the stream/recorder state.
+    op_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def build_context(
@@ -123,6 +127,42 @@ def build_context(
     return ctx
 
 
+def _install_auth(app: FastAPI) -> None:
+    """Optional shared-token gate (spec: bench LAN is otherwise trusted).
+
+    Off by default so the simulator, tests and an air-gapped stand are
+    unaffected. When TBCTL_API_TOKEN is set in the environment, every request
+    must present it as `Authorization: Bearer <token>`, an `X-API-Token`
+    header, or a `?token=` query param (the last is for the WebSocket, which
+    can't set headers from the browser). This is a coarse control-plane lock,
+    not per-user auth — pair it with binding to a trusted interface.
+    """
+    import hmac
+    import os
+
+    token = os.environ.get("TBCTL_API_TOKEN")
+    if not token:
+        return
+
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    def _presented(request: Request) -> str | None:
+        auth = request.headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[7:]
+        return request.headers.get("x-api-token") or request.query_params.get("token")
+
+    @app.middleware("http")
+    async def _auth_mw(request: Request, call_next):
+        supplied = _presented(request)
+        if supplied is None or not hmac.compare_digest(supplied, token):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return await call_next(request)
+
+    log.info("API token auth enabled")
+
+
 def build_app(ctx: NodeContext) -> FastAPI:
     from tbctl.api import rest, ws
 
@@ -131,9 +171,17 @@ def build_app(ctx: NodeContext) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         loop = asyncio.get_running_loop()
+        bg_tasks: set[asyncio.Task] = set()
+
+        def _spawn_broadcast(record: dict) -> None:
+            # keep a strong reference: the event loop only weakly references
+            # tasks, so a bare create_task can be GC'd mid-flight
+            task = loop.create_task(hub.broadcast_event(**record))
+            bg_tasks.add(task)
+            task.add_done_callback(bg_tasks.discard)
 
         def ws_sink(record: dict) -> None:
-            loop.call_soon_threadsafe(lambda: loop.create_task(hub.broadcast_event(**record)))
+            loop.call_soon_threadsafe(_spawn_broadcast, record)
 
         remove_sink = ctx.events.add_sink(ws_sink)
         ctx.iface.open()
@@ -156,6 +204,7 @@ def build_app(ctx: NodeContext) -> FastAPI:
             yield
         finally:
             await ctx.sequencer.shutdown()
+            ctx.manual.shutdown()
             if ctx.recorder.active:
                 await ctx.recorder.stop_run()
             remove_sink()
@@ -163,9 +212,12 @@ def build_app(ctx: NodeContext) -> FastAPI:
             await ctx.acq.stop()
             ctx.iface.close()
 
-    app = FastAPI(title="tbctl-node", lifespan=lifespan)
+    app = FastAPI(
+        title="tbctl-node", lifespan=lifespan, default_response_class=rest.SafeJSONResponse
+    )
     app.state.ctx = ctx
     app.state.hub = hub
+    _install_auth(app)
     app.include_router(rest.build_router(ctx))
     app.include_router(ws.build_router(ctx, hub))
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import re
+from collections.abc import Collection
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -19,6 +20,10 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+# Wire-format limits come from the generated register constants so
+# registers.yaml stays the single source of truth (never hardcode them here).
+from tbctl.hw.registers_gen import MAX_STEPS, MIN_STEP_SPACING_MS
 
 # ---------------------------------------------------------------------------
 # DIO naming: global DIO numbers on the T7. The 16-bit sequence state word
@@ -109,6 +114,11 @@ class TableCal(StrictModel):
 Cal = Annotated[PolynomialCal | LinearCal | TableCal, Field(discriminator="kind")]
 
 
+# T7 AIN gains the LJM driver actually supports; anything else is silently
+# coerced by LJM, so refuse it at validation time.
+LJM_AIN_RANGES = (10.0, 1.0, 0.1, 0.01)
+
+
 class AnalogInChannel(StrictModel):
     tag: str
     hw: str
@@ -126,6 +136,16 @@ class AnalogInChannel(StrictModel):
             raise ValueError(f"analog_in hw must be AIN0..AIN127, got {v!r}")
         return v
 
+    @field_validator("range")
+    @classmethod
+    def _range(cls, v: float) -> float:
+        if v not in LJM_AIN_RANGES:
+            raise ValueError(
+                f"range must be one of {sorted(LJM_AIN_RANGES, reverse=True)} V "
+                f"(LJM-supported AIN gains), got {v!r}"
+            )
+        return v
+
 
 class ThermocoupleChannel(StrictModel):
     tag: str
@@ -137,8 +157,9 @@ class ThermocoupleChannel(StrictModel):
     @field_validator("hw")
     @classmethod
     def _ain(cls, v: str) -> str:
-        if not _AIN_RE.match(v):
-            raise ValueError(f"thermocouple hw must be an AIN, got {v!r}")
+        m = _AIN_RE.match(v)
+        if not m or int(m.group(1)) > 127:  # same AIN space as analog_in (Mux80 max)
+            raise ValueError(f"thermocouple hw must be AIN0..AIN127, got {v!r}")
         return v
 
 
@@ -248,6 +269,29 @@ class ChannelMap(StrictModel):
                     f"{c.tag}: sequencer outputs must be on FIO0-7/EIO0-7 "
                     f"(DIO_STATE bits 0..15), got {c.hw}"
                 )
+        # The stream needs at least one scanned channel: an output-only map
+        # passes sim but fails eStreamStart on hardware, and leaves redlines
+        # and preconditions with nothing to evaluate.
+        inputs = [c for c in self.channels if isinstance(c, InputChannel)]
+        if not inputs:
+            raise ValueError(
+                "channel map needs at least one input channel "
+                "(analog_in / thermocouple_k): the acquisition stream cannot start without one"
+            )
+        # Rate-group divisibility — mirrors AcquisitionService._configure
+        # exactly: the stream runs at the fastest rate among the groups that
+        # input channels actually use, and every used group must decimate
+        # from it by an integer factor. Validating here means a channel map
+        # that would crash acquisition at (re)configure time can never load.
+        used_groups = {c.rate_group for c in inputs}
+        scan_rate_hz = max(self.rate_groups[g].rate_hz for g in used_groups)
+        for g in sorted(used_groups):
+            rate_hz = self.rate_groups[g].rate_hz
+            factor = scan_rate_hz / rate_hz
+            if abs(factor - round(factor)) > 1e-9:
+                raise ValueError(
+                    f"rate group {g}: {rate_hz} Hz must divide stream rate {scan_rate_hz} Hz"
+                )
         return self
 
     # -- derived views -----------------------------------------------------
@@ -324,8 +368,12 @@ class ChannelMap(StrictModel):
 # §4.2 sequence
 # ---------------------------------------------------------------------------
 
-MAX_STEPS = 128
-MIN_STEP_SPACING_S = 0.002
+MIN_STEP_SPACING_S = MIN_STEP_SPACING_MS / 1000.0
+# The on-device Lua rejects any step time above one hour (BAD_TABLE); mirror
+# that bound host-side for every table (main AND abort) so it can never
+# surface as a device fault or an unpackable table.
+MAX_STEP_T_MS = 3_600_000
+MAX_STEP_T_S = MAX_STEP_T_MS / 1000.0
 _EPS = 1e-9
 
 StepValue = Literal["open", "close", "on", "off"]
@@ -374,6 +422,12 @@ class Redline(StrictModel):
 def _check_steps(steps: list[SeqStep], what: str, max_duration_s: float | None) -> None:
     if len(steps) > MAX_STEPS:
         raise ValueError(f"{what}: {len(steps)} steps exceeds max {MAX_STEPS}")
+    for step in steps:
+        if step.t > MAX_STEP_T_S + _EPS:
+            raise ValueError(
+                f"{what}: step at t={step.t} exceeds the device's "
+                f"{MAX_STEP_T_S:.0f} s (1 h) step-time limit"
+            )
     for prev, cur in itertools.pairwise(steps):
         if cur.t < prev.t - _EPS:
             raise ValueError(f"{what}: step times must be non-decreasing (t={cur.t})")
@@ -409,7 +463,46 @@ class Sequence(StrictModel):
     def _validate(self) -> Sequence:
         _check_steps(self.steps, "steps", self.max_duration_s)
         _check_steps(self.abort, "abort", None)
+        # The abort table must act immediately: its first step is the word
+        # applied the instant ABORT is taken, so any positive start time is
+        # pure added latency with the engine still in its firing state.
+        if self.abort and self.abort[0].t > _EPS:
+            raise ValueError(
+                f"abort: first step must be at t=0 (got t={self.abort[0].t}); "
+                "aborts must apply their first word with zero latency"
+            )
         return self
+
+
+def _table_cal_limit_errors(
+    what: str, i: int, tag: str, min_: float | None, max_: float | None, chmap: ChannelMap
+) -> list[str]:
+    """A TableCal channel clamps (np.interp) to its table's y-range, so a
+    limit at/outside that range can never trip (dead redline / vacuous
+    precondition) or can never pass — either way the config is wrong."""
+    try:
+        ch = chmap.by_tag(tag)
+    except KeyError:
+        return []
+    if not (isinstance(ch, AnalogInChannel) and isinstance(ch.cal, TableCal)):
+        return []
+    y_lo, y_hi = min(ch.cal.y), max(ch.cal.y)
+    errors: list[str] = []
+    # `min` bound: reachable values are [y_lo, y_hi]; v < min can only ever
+    # be observed when y_lo < min, and v >= min can only hold when min <= y_hi.
+    if min_ is not None and not (y_lo < min_ <= y_hi):
+        errors.append(
+            f"{what}[{i}]: min {min_} is outside the calibration table's "
+            f"representable range [{y_lo}, {y_hi}] of {tag!r} — the clamped "
+            "cal makes this limit dead or impossible"
+        )
+    if max_ is not None and not (y_lo <= max_ < y_hi):
+        errors.append(
+            f"{what}[{i}]: max {max_} is outside the calibration table's "
+            f"representable range [{y_lo}, {y_hi}] of {tag!r} — the clamped "
+            "cal makes this limit dead or impossible"
+        )
+    return errors
 
 
 def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
@@ -435,9 +528,13 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
     for i, pre in enumerate(seq.preconditions):
         if pre.tag not in input_tags:
             errors.append(f"preconditions[{i}]: {pre.tag!r} is not an input channel")
+        else:
+            errors += _table_cal_limit_errors("preconditions", i, pre.tag, pre.min, pre.max, chmap)
     for i, rl in enumerate(seq.redlines):
         if rl.tag not in input_tags:
             errors.append(f"redlines[{i}]: {rl.tag!r} is not an input channel")
+        else:
+            errors += _table_cal_limit_errors("redlines", i, rl.tag, rl.min, rl.max, chmap)
     return errors
 
 
@@ -492,13 +589,27 @@ class ReviewConfig(StrictModel):
         return self
 
 
-def cross_validate_review(cfg: ReviewConfig, chmap: ChannelMap) -> list[str]:
+def cross_validate_review(
+    cfg: ReviewConfig,
+    chmap: ChannelMap,
+    sequence_names: Collection[str] | None = None,
+) -> list[str]:
     readable = chmap.readable_tags()
-    return [
+    errors = [
         f"rule {r.name}: {r.tag!r} is not a readable channel"
         for r in cfg.rules
         if r.tag not in readable
     ]
+    # `sequences:` scoping must reference sequences that actually exist —
+    # otherwise a renamed sequence silently disables the rule (reports just
+    # shrink). Only checked when the caller knows the sequence set.
+    if sequence_names is not None:
+        known = set(sequence_names)
+        for r in cfg.rules:
+            for s in r.sequences:
+                if s not in known:
+                    errors.append(f"rule {r.name}: sequences: references unknown sequence {s!r}")
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +640,16 @@ class PidSensorElement(StrictModel):
     decimals: int = Field(default=1, ge=0, le=5)
     warn_min: float | None = None
     warn_max: float | None = None
+
+    @model_validator(mode="after")
+    def _warn_bounds(self) -> PidSensorElement:
+        if (
+            self.warn_min is not None
+            and self.warn_max is not None
+            and self.warn_min >= self.warn_max
+        ):
+            raise ValueError("warn_min must be < warn_max")
+        return self
 
 
 class PidLabelElement(StrictModel):
@@ -621,6 +742,13 @@ class YAxisConfig(StrictModel):
     def _manual_bounds(self) -> YAxisConfig:
         if self.mode == "manual" and (self.min is None or self.max is None):
             raise ValueError("manual y_axis needs min and max")
+        if (
+            self.mode == "manual"
+            and self.min is not None
+            and self.max is not None
+            and self.min >= self.max
+        ):
+            raise ValueError("manual y_axis needs min < max")
         if self.log and self.mode == "manual" and self.min is not None and self.min <= 0:
             raise ValueError("log y_axis needs min > 0")
         return self
@@ -657,3 +785,31 @@ class Dashboard(StrictModel):
                     f"panel {p.id}: x+w={p.x + p.w} exceeds grid cols={self.grid.cols}"
                 )
         return self
+
+
+_GLOB_CHARS = ("*", "?", "[")
+
+
+def cross_validate_dashboard(
+    dash: Dashboard,
+    chmap: ChannelMap,
+    pid_names: Collection[str] | None = None,
+) -> list[str]:
+    """Channel-map-dependent checks: literal panel channel tags must exist
+    (glob patterns are matched at render time and are skipped here), and a
+    `pid` panel must reference an existing P&ID config when the caller knows
+    the P&ID set. Returns a list of error strings."""
+    errors: list[str] = []
+    known = chmap.readable_tags() | {c.tag for c in chmap.outputs()}
+    for p in dash.panels:
+        for tag in p.channels:
+            if any(ch in tag for ch in _GLOB_CHARS):
+                continue  # glob pattern (value_table): resolved at render time
+            if tag not in known:
+                errors.append(f"panel {p.id}: channel {tag!r} is not in the channel map")
+        if p.type == "pid":
+            if p.pid is None:
+                errors.append(f"panel {p.id}: pid panel needs a `pid:` config name")
+            elif pid_names is not None and p.pid not in set(pid_names):
+                errors.append(f"panel {p.id}: unknown pid config {p.pid!r}")
+    return errors

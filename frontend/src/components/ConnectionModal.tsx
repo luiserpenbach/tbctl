@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { post } from "../api";
 
 interface ConnInfo {
@@ -18,13 +18,20 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
   const [ip, setIp] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  // H10: prefill the IP exactly once, and never after the operator typed —
+  // the 2 s poll must not revert an address being edited
+  const ipTouched = useRef(false);
+  const ipPrefilled = useRef(false);
 
   const refresh = () =>
     fetch("/api/connection")
       .then((r) => r.json())
       .then((i: ConnInfo) => {
         setInfo(i);
-        if (!ip) setIp(i.ip);
+        if (!ipTouched.current && !ipPrefilled.current && i.ip) {
+          ipPrefilled.current = true;
+          setIp(i.ip);
+        }
       })
       .catch((e) => setMsg(String(e)));
 
@@ -123,7 +130,10 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
                 className="modal-input"
                 style={{ width: 120 }}
                 value={ip}
-                onChange={(e) => setIp(e.target.value)}
+                onChange={(e) => {
+                  ipTouched.current = true;
+                  setIp(e.target.value);
+                }}
                 placeholder="device ip"
               />
             </div>

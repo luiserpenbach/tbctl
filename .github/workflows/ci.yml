@@ -14,11 +14,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y lua5.4
       - uses: astral-sh/setup-uv@v5
       - name: Sync deps (no hardware extra — simulator only)
-        run: uv venv --python 3.12 && uv sync
+        # --locked fails CI on a stale lockfile instead of silently re-resolving
+        run: uv venv --python 3.12 && uv sync --locked
       - name: Ruff lint + format
+        # include tools/ so the whole tree is linted, not just src/shared/tests
         run: |
-          uv run ruff check src shared tests
-          uv run ruff format --check src shared tests
+          uv run ruff check src shared tests tools
+          uv run ruff format --check src shared tests tools
       - name: Generated register constants in sync (D10)
         run: uv run tbctl codegen --check
       - name: Example configs validate
@@ -29,6 +31,9 @@ jobs:
         run: lua5.4 tests/lua/run_crc_tests.lua
       - name: Real sequencer.lua state machine (§10.1)
         run: lua5.4 tests/lua/run_sequencer_tests.lua
+        # NOTE: the DEPLOYED (minified) artifact is run through the same harness
+        # by tests/test_lua_sequencer.py::test_minified_sequencer_state_machine
+        # in the Pytest step above, so a minifier regression cannot ship green.
 
   frontend:
     runs-on: ubuntu-latest
@@ -45,3 +50,8 @@ jobs:
       - run: npm ci
       - name: Type-check + build
         run: npm run build
+      - name: Upload built SPA (docs/deployment.md consumes this)
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist

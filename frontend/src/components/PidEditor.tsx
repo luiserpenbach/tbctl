@@ -98,7 +98,10 @@ export function PidEditor() {
         .then((r) => {
           setMsg(`uploaded ${r.asset}`);
           refresh();
-          upd({ background: r.asset });
+          // functional update: cfg may have been edited while the upload was
+          // in flight — a stale closure would revert those edits
+          setCfg((prev) => (prev ? { ...prev, background: r.asset } : prev));
+          setDirty(true);
         })
         .catch((e) => setMsg(String(e).replace(/^Error: /, ""))),
     );
@@ -229,6 +232,13 @@ export function PidEditor() {
                 value={sel.id}
                 onChange={(e) => {
                   const id = e.target.value;
+                  // duplicate ids would make the confirm popover target the
+                  // wrong element — reject the rename (M25)
+                  if (cfg.elements.some((x) => x.id === id && x.id !== sel.id)) {
+                    setMsg(`id "${id}" already in use`);
+                    return;
+                  }
+                  setMsg("");
                   updEl(sel.id, { id });
                   setSelId(id);
                 }}

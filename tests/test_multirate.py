@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from tbctl.config.loader import load_channels
+from tbctl.config.loader import ConfigError, load_channels
 from tbctl.hw.ljm_mock import MockDevice
 from tbctl.services.acquisition import AcquisitionService
 from tbctl.services.recorder import Recorder
@@ -117,10 +117,10 @@ async def test_live_window_and_frames_per_group(rig):
 
 
 def test_non_integer_decimation_rejected(tmp_path):
+    # A non-integer decimation is now rejected at model validation (load time),
+    # so a config that would crash acquisition can never be persisted/applied.
     bad = MULTIRATE_YAML.replace("rate_hz: 50}", "rate_hz: 300}")  # 1000/300 not integer
     p = tmp_path / "channels.yaml"
     p.write_text(bad)
-    loaded = load_channels(p)
-    mock = MockDevice(loaded.model)
-    with pytest.raises(ValueError, match="must divide"):
-        AcquisitionService(loaded.model, mock)
+    with pytest.raises(ConfigError, match="must divide"):
+        load_channels(p)

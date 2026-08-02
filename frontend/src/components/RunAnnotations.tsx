@@ -21,10 +21,16 @@ export function RunAnnotations() {
 
   useEffect(() => {
     setAnns([]);
-    if (runId)
-      fetchAnnotations(runId)
-        .then((r) => setAnns(r.annotations))
-        .catch(() => {});
+    if (!runId) return;
+    let cancelled = false; // stale-guard (M22): late response from a previous run
+    fetchAnnotations(runId)
+      .then((r) => {
+        if (!cancelled) setAnns(r.annotations);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [runId, annVersion]);
 
   if (!runId || anns.length === 0) return null;

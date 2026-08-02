@@ -1,10 +1,11 @@
 """Sequence editor: validate (dry-run compile + timeline), save with backup,
-save-as cloning, and the loaded/armed edit guard."""
+save-as cloning, transactional writes, and the loaded/armed edit guard."""
 
 import shutil
 
 import httpx
 import pytest
+import yaml
 
 from tbctl.node import build_app, build_context
 from tests.conftest import CONFIGS
@@ -115,6 +116,64 @@ async def test_invalid_save_writes_nothing(client):
     assert not (client.cfg / ".backups").exists()
     assert (await client.post("/api/sequences/bad name!", json=cfg)).status_code in (400, 404, 422)
     assert (await client.post("/api/sequences/validate99/x", json=cfg)).status_code in (404, 405)
+
+
+async def test_abort_start_and_time_cap_enforced(client):
+    """M12/M16 through the API: abort must start at t=0 and no step may
+    exceed the device's 1 h limit — both 422, never a 500 or device fault."""
+    cfg = (await client.get("/api/sequences/coldflow_v1/config")).json()["config"]
+    cfg["abort"][0]["t"] = 0.25
+    r = await client.post("/api/sequences/validate", json=cfg)
+    assert r.status_code == 422
+    assert "t=0" in str(r.json())
+
+    cfg = (await client.get("/api/sequences/coldflow_v1/config")).json()["config"]
+    cfg["abort"].append({"t": 5e6, "set": {"valve.purge": "close"}})
+    r = await client.post("/api/sequences/validate", json=cfg)
+    assert r.status_code == 422
+    assert "1 h" in str(r.json())
+    # and save is refused the same way, leaving the file untouched
+    before = (client.cfg / "sequences" / "coldflow_v1.yaml").read_bytes()
+    assert (await client.post("/api/sequences/coldflow_v1", json=cfg)).status_code == 422
+    assert (client.cfg / "sequences" / "coldflow_v1.yaml").read_bytes() == before
+
+
+async def test_saved_yaml_is_validated_dump_and_vanilla_safe(client):
+    """C5/M17: saves persist the validated model's dump; spark on/off remain
+    strings for a STANDARD yaml parser."""
+    cfg = (await client.get("/api/sequences/hotfire_v1/config")).json()["config"]
+    r = await client.post("/api/sequences/hotfire_v1", json=cfg)
+    assert r.status_code == 200, r.text
+    parsed = yaml.safe_load((client.cfg / "sequences" / "hotfire_v1.yaml").read_text())
+    spark_vals = [
+        v
+        for s in parsed["steps"] + parsed["abort"]
+        for k, v in s["set"].items()
+        if k == "spark.igniter"
+    ]
+    assert spark_vals, "hotfire_v1 should drive the spark"
+    assert all(v in ("on", "off") for v in spark_vals)  # strings, not True/False
+    # no stray temp files from the atomic write
+    assert not list((client.cfg / "sequences").glob(".*.tmp"))
+
+
+async def test_sequence_save_restores_file_on_reload_failure(client, monkeypatch):
+    """C5 (editor half): a failed post-write reload must put the previous
+    file back instead of leaving a half-applied config on disk."""
+    import tbctl.services.config_editor as ce
+
+    before = (client.cfg / "sequences" / "coldflow_v1.yaml").read_bytes()
+
+    def boom(path, chmap=None):
+        raise RuntimeError("simulated reload failure")
+
+    monkeypatch.setattr(ce, "load_sequence", boom)
+    cfg = (await client.get("/api/sequences/coldflow_v1/config")).json()["config"]
+    cfg["description"] = "must not persist"
+    with pytest.raises(RuntimeError, match="simulated reload failure"):
+        await client.post("/api/sequences/coldflow_v1", json=cfg)
+    assert (client.cfg / "sequences" / "coldflow_v1.yaml").read_bytes() == before
+    assert client.ctx.bundle.sequences["coldflow_v1"].model.description != "must not persist"
 
 
 async def test_loaded_sequence_is_read_only(client):

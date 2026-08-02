@@ -8,12 +8,15 @@ import { fetchDashboard, fetchRuns } from "./api";
 import { useStore } from "./store";
 
 let applying = false;
+let applied = false; // idempotent under StrictMode double-invoke / init retry
 
 // captured at module load — the sync subscription rewrites location.hash as
 // soon as the store changes, so the arrival hash must be snapshotted first
 const initialHash = window.location.hash;
 
 export async function applyHashOnce(): Promise<void> {
+  if (applied) return;
+  applied = true;
   const h = new URLSearchParams(initialHash.replace(/^#/, ""));
   if ([...h.keys()].length === 0) return;
   applying = true;
@@ -31,17 +34,24 @@ export async function applyHashOnce(): Promise<void> {
         /* dashboard gone — ignore */
       }
     }
-    const runId = h.get("r");
-    if (runId) {
-      const runs = (await fetchRuns()).runs;
-      const run = runs.find((x) => x.run_id === runId);
-      if (run) {
-        s.setViewMode({ mode: "run", run });
-        for (const oid of (h.get("o") ?? "").split(",").filter(Boolean)) {
-          const o = runs.find((x) => x.run_id === oid);
-          if (o) s.toggleOverlayRun(o);
+    try {
+      const runId = h.get("r");
+      if (runId) {
+        const runs = (await fetchRuns()).runs;
+        const run = runs.find((x) => x.run_id === runId);
+        if (run) {
+          s.setViewMode({ mode: "run", run });
+          for (const oid of (h.get("o") ?? "").split(",").filter(Boolean)) {
+            const o = runs.find((x) => x.run_id === oid);
+            // apply, don't toggle: a re-entrant call must not un-apply an
+            // overlay that is already on
+            if (o && !useStore.getState().overlayRuns.some((x) => x.run_id === o.run_id))
+              s.toggleOverlayRun(o);
+          }
         }
       }
+    } catch {
+      /* runs unavailable — keep whatever applied so far */
     }
   } finally {
     applying = false;

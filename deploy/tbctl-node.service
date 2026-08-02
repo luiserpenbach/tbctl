@@ -8,6 +8,10 @@
 Description=tbctl testbench control node
 After=network-online.target data-tbctl.mount
 Wants=network-online.target
+# Require the run SSD to be mounted: without this a dropped/absent mount
+# (fstab nofail) would silently land runs on the SD card. RequiresMountsFor
+# also pulls in the mount and fails the unit if it is gone.
+RequiresMountsFor=/data/tbctl
 
 [Service]
 Type=simple
@@ -19,12 +23,23 @@ ExecStart=/opt/tbctl/.venv/bin/tbctl-node \
     --data-dir /data/tbctl/runs \
     --log-dir /data/tbctl/logs \
     --host 0.0.0.0 --port 8000
-Restart=on-failure
+# Restart on ANY exit (incl. a clean exit or a hang that the layers below still
+# fail-safe), not only on failure, so the control plane never stays down after
+# an unexpected stop. The Lua heartbeat abort + hardware watchdog safe the
+# outputs while the node is down; this just brings the UI/recovery back.
+Restart=always
 RestartSec=2
 # the node is the only writer of runs/events; keep the rest read-only
 ProtectSystem=full
 ReadWritePaths=/data/tbctl /opt/tbctl/configs
 NoNewPrivileges=true
+# extra sandboxing (the node needs no home, no device nodes, only inet sockets)
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6
+# Optional shared-token control-plane lock (off unless set). See node.py
+# _install_auth / docs/deployment.md. Uncomment and set to require a token:
+# Environment=TBCTL_API_TOKEN=change-me
 
 [Install]
 WantedBy=multi-user.target

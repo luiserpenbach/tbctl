@@ -2,18 +2,25 @@ import { useState } from "react";
 import { setManualValve } from "../../api";
 import { useStore } from "../../store";
 
+// dio_state older than this is not trusted for valve rendering/gating (M28)
+const SEQ_FRESH_MS = 2500;
+
 // Manual buttons are only live when control mode is enabled AND the
 // sequencer is IDLE (§8); the node enforces the same rule server-side.
 export function ValvePanel() {
   const status = useStore((s) => s.status);
   const seq = useStore((s) => s.seqStatus);
+  const lastSeqStatusAt = useStore((s) => s.lastSeqStatusAt);
   const channels = useStore((s) => s.channels);
   const [err, setErr] = useState("");
   const outputs = channels.filter((c) => c.kind === "valve" || c.kind === "spark");
 
   if (!status) return <div className="placeholder">waiting for status…</div>;
 
-  const seqState = seq?.state ?? status.sequencer.state;
+  // M28: prefer the 10 Hz WS dio_state, but only while it is actually
+  // fresh — during a WS outage fall back to the 2 s REST status poll
+  const seqFresh = seq !== null && Date.now() - lastSeqStatusAt < SEQ_FRESH_MS;
+  const seqState = seqFresh && seq ? seq.state : status.sequencer.state;
   const canActuate = status.control_enabled && seqState === "IDLE";
 
   const actuate = (tag: string, state: string) => {
@@ -21,9 +28,8 @@ export function ValvePanel() {
     setManualValve(tag, state).catch((e) => setErr(String(e).replace(/^Error: /, "")));
   };
 
-  // prefer the 10 Hz WS dio_state over the 2 s status poll
   const liveState = (c: (typeof outputs)[number]): string => {
-    if (seq && c.bit !== undefined && c.active_level !== undefined) {
+    if (seqFresh && seq && c.bit !== undefined && c.active_level !== undefined) {
       const level = (seq.dio_state >> c.bit) & 1;
       const active = level === c.active_level;
       return c.kind === "valve" ? (active ? "open" : "closed") : active ? "on" : "off";

@@ -33,10 +33,18 @@ export function RunEventsBar() {
   useEffect(() => {
     setEvents([]);
     setOpen(false);
-    if (runId)
-      fetchRunEvents(runId)
-        .then((r) => setEvents(r.events))
-        .catch(() => {});
+    if (!runId) return;
+    // stale-guard (M22): a slow response for a previous run must not land
+    // after switching to another run (or back to live)
+    let cancelled = false;
+    fetchRunEvents(runId)
+      .then((r) => {
+        if (!cancelled) setEvents(r.events);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [runId]);
 
   if (!runId || events.length === 0) return null;

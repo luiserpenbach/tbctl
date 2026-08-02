@@ -4,17 +4,50 @@ WebSocket (D6)."""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import math
 import re
 import time
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from tbctl.hw.registers_gen import REG_NAME, SeqError, SeqState
 
 if TYPE_CHECKING:
     from tbctl.node import NodeContext
+
+
+def _json_safe(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN/inf) with None.
+
+    A single NaN — from a dead sensor, a failed derived channel, or a masked
+    LJM dummy sample — otherwise serializes as the bare token `NaN`, which is
+    not valid JSON and makes the browser reject the entire response body.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+class SafeJSONResponse(JSONResponse):
+    """Default response class: emits valid JSON even when payloads contain
+    non-finite floats (encoded as null)."""
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            _json_safe(content),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
 
 
 class SimSet(BaseModel):
@@ -265,6 +298,11 @@ def build_router(ctx: NodeContext) -> APIRouter:
     def _seq_err(e: Exception) -> HTTPException:
         return HTTPException(409, str(e))
 
+    async def _state() -> str:
+        # read the sequencer state off the event loop — a real device read is a
+        # blocking round-trip that must not stall the loop
+        return (await asyncio.to_thread(ctx.sequencer.state)).name
+
     @r.post("/sequences/{name}/load")
     async def seq_load(name: str) -> dict:
         from tbctl.services.compiler import CompileError
@@ -287,23 +325,25 @@ def build_router(ctx: NodeContext) -> APIRouter:
             await ctx.sequencer.arm(body.confirm, ctx.control_enabled)
         except SequencerError as e:
             raise _seq_err(e) from e
-        return {"ok": True, "state": ctx.sequencer.state().name}
+        return {"ok": True, "state": (await _state())}
 
     @r.post("/sequences/fire")
     async def seq_fire(body: Confirm) -> dict:
         from tbctl.services.sequencer import SequencerError
 
         try:
-            await ctx.sequencer.fire(body.confirm)
+            await ctx.sequencer.fire(body.confirm, ctx.control_enabled)
         except SequencerError as e:
             raise _seq_err(e) from e
-        return {"ok": True, "state": ctx.sequencer.state().name}
+        return {"ok": True, "state": (await _state())}
 
     @r.post("/sequences/abort")
     async def seq_abort() -> dict:
-        # ALWAYS accepted, no body, fastest path in the API (§7)
-        await ctx.sequencer.abort()
-        return {"ok": True}
+        # ALWAYS accepted, no body, fastest path in the API (§7). Report the
+        # verified outcome so the UI can tell a confirmed abort from an
+        # escalated (interpreter-unresponsive) one rather than assuming success.
+        result = await ctx.sequencer.abort()
+        return {"ok": True, **result}
 
     @r.post("/sequences/reset")
     async def seq_reset() -> dict:
@@ -313,7 +353,7 @@ def build_router(ctx: NodeContext) -> APIRouter:
             await ctx.sequencer.reset()
         except SequencerError as e:
             raise _seq_err(e) from e
-        return {"ok": True, "state": ctx.sequencer.state().name}
+        return {"ok": True, "state": (await _state())}
 
     @r.get("/sequences/preconditions")
     def seq_preconditions() -> dict:
@@ -401,9 +441,16 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(409, str(e)) from e
 
     @r.post("/control-mode")
-    def control_mode(body: ControlMode) -> dict:
+    async def control_mode(body: ControlMode) -> dict:
         ctx.control_enabled = body.enabled
         ctx.events.log("control_mode", enabled=body.enabled)
+        # Disabling control mode is the operator's "lock out the bench" action:
+        # if a sequence is armed or running, fail safe rather than leaving it
+        # live behind a disabled control plane.
+        if not body.enabled:
+            st = await asyncio.to_thread(ctx.sequencer.state)
+            if st in (SeqState.ARMED, SeqState.RUNNING):
+                await ctx.sequencer.abort(reason="control mode disabled")
         return {"enabled": ctx.control_enabled}
 
     # ------------------------------------------------------------- runs
@@ -413,7 +460,8 @@ def build_router(ctx: NodeContext) -> APIRouter:
         from tbctl.services.recorder import RecorderError
 
         try:
-            run = await ctx.recorder.start_run(body.name, body.operator, body.notes)
+            async with ctx.op_lock:
+                run = await ctx.recorder.start_run(body.name, body.operator, body.notes)
         except RecorderError as e:
             raise HTTPException(409, str(e)) from e
         ctx.events.log("run_started", run_id=run.run_id, name=run.name, operator=run.operator)
@@ -424,7 +472,8 @@ def build_router(ctx: NodeContext) -> APIRouter:
         from tbctl.services.recorder import RecorderError
 
         try:
-            run = await ctx.recorder.stop_run()
+            async with ctx.op_lock:
+                run = await ctx.recorder.stop_run()
         except RecorderError as e:
             raise HTTPException(409, str(e)) from e
         ctx.events.log("run_stopped", run_id=run.run_id, sample_counts=run.sample_counts)
@@ -689,20 +738,33 @@ def build_router(ctx: NodeContext) -> APIRouter:
 
         from tbctl.services.config_editor import apply_channels, validate_channels_payload
 
-        _switch_guard()
-        try:
-            chmap, errors = validate_channels_payload(ctx, payload)
-        except ValidationError as e:
-            raise HTTPException(
-                422,
-                [
-                    {"loc": ".".join(str(x) for x in err["loc"]), "msg": err["msg"]}
-                    for err in e.errors()
-                ],
-            ) from e
-        if errors:
-            raise HTTPException(422, [{"loc": "sequences", "msg": m} for m in errors])
-        return await apply_channels(ctx, chmap, payload)
+        async with ctx.op_lock:
+            _switch_guard()
+            try:
+                chmap, errors = validate_channels_payload(ctx, payload)
+            except ValidationError as e:
+                raise HTTPException(
+                    422,
+                    [
+                        {"loc": ".".join(str(x) for x in err["loc"]), "msg": err["msg"]}
+                        for err in e.errors()
+                    ],
+                ) from e
+            if errors:
+                raise HTTPException(422, [{"loc": "sequences", "msg": m} for m in errors])
+            result = await apply_channels(ctx, chmap, payload)
+            # a changed safe_word/inhibit/DIO mapping must be re-pushed to the
+            # hardware watchdog, which otherwise keeps enforcing the old image
+            if not ctx.iface.is_sim:
+                import contextlib
+
+                from tbctl.hw.watchdog import configure_watchdog
+
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        configure_watchdog, ctx.iface, ctx.bundle.channels.model
+                    )
+            return result
 
     # ------------------------------------------------ checklists (phase 15)
 
@@ -878,42 +940,61 @@ def build_router(ctx: NodeContext) -> APIRouter:
 
     @r.post("/connection")
     async def connection_switch(body: ConnectionSwitch) -> dict:
-        _switch_guard()
-        try:
-            await ctx.device_mgr.switch(body.mode, body.ip)
-        except Exception as e:
-            raise HTTPException(502, f"switch failed (previous connection restored): {e}") from e
-        ctx.sim = ctx.iface.is_sim
-        return ctx.device_mgr.info()
+        async with ctx.op_lock:
+            _switch_guard()
+            try:
+                await ctx.device_mgr.switch(body.mode, body.ip)
+            except Exception as e:
+                raise HTTPException(
+                    502, f"switch failed (previous connection restored): {e}"
+                ) from e
+            ctx.sim = ctx.iface.is_sim
+            return ctx.device_mgr.info()
 
     @r.post("/connection/deploy-lua")
     async def connection_deploy() -> dict:
-        import asyncio
+        import contextlib
 
         from tbctl.hw.script_loader import ScriptLoadError, deploy_script, read_debug
         from tbctl.hw.watchdog import configure_watchdog
 
         if ctx.iface.is_sim:
             raise HTTPException(409, "deploy not applicable in simulator mode")
-        _switch_guard()
-        try:
-            version = await asyncio.to_thread(deploy_script, ctx.iface)
-            await asyncio.to_thread(configure_watchdog, ctx.iface, ctx.bundle.channels.model)
-        except ScriptLoadError as e:
-            import contextlib
+        async with ctx.op_lock:
+            _switch_guard()
+            version = None
+            try:
+                version = await asyncio.to_thread(deploy_script, ctx.iface)
+            except ScriptLoadError as e:
+                debug = ""
+                with contextlib.suppress(Exception):
+                    debug = await asyncio.to_thread(read_debug, ctx.iface)
+                raise HTTPException(502, f"deploy failed: {e}\nLUA_DEBUG: {debug}") from e
+            finally:
+                # deploy_script stops the stream (release_shared_ram) and, on
+                # failure, leaves the hardware watchdog disabled. Always re-arm
+                # layer 2 and bring the stream back so a failed deploy can never
+                # leave the node blind with no fail-safe.
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        configure_watchdog, ctx.iface, ctx.bundle.channels.model
+                    )
+                with contextlib.suppress(Exception):
+                    await ctx.acq.stop()
+                    await ctx.acq.start()
+            ctx.events.log("lua_deployed", interp_version=version)
+            return {"ok": True, "interp_version": version}
 
-            debug = ""
-            with contextlib.suppress(Exception):
-                debug = await asyncio.to_thread(read_debug, ctx.iface)
-            raise HTTPException(502, f"deploy failed: {e}\nLUA_DEBUG: {debug}") from e
-        ctx.events.log("lua_deployed", interp_version=version)
-        return {"ok": True, "interp_version": version}
+    # wiring-checkout register peek is limited to a safe read-only allowlist so
+    # it can't be used as an arbitrary device-register scraper
+    _READ_ALLOW = re.compile(r"^(AIN\d+|DIO_STATE|DIO_INHIBIT|TEMPERATURE_DEVICE_K)$")
 
     @r.get("/connection/read")
     def connection_read(name: str) -> dict:
         """One-shot register peek by LJM name (wiring checkout)."""
-        if not re.match(r"^[A-Za-z0-9_#]+$", name):
-            raise HTTPException(400, "bad register name")
+        allowed = set(REG_NAME.values())
+        if not (_READ_ALLOW.match(name) or name in allowed):
+            raise HTTPException(400, "register not in read allowlist")
         try:
             value = ctx.iface.read_name(name)
         except Exception as e:

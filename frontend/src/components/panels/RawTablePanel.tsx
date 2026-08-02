@@ -16,14 +16,30 @@ export function RawTablePanel() {
   const [peek, setPeek] = useState("");
 
   useEffect(() => {
-    const poll = () =>
+    // in-flight + out-of-order guards: a slow response must not overwrite a
+    // fresher one (and polls must not pile up while one is stuck)
+    let epoch = 0;
+    let inFlight = false;
+    const poll = () => {
+      if (inFlight) return;
+      const n = ++epoch;
+      inFlight = true;
       fetch("/api/raw")
         .then((r) => r.json())
-        .then((d) => setRows(d.channels))
-        .catch(() => {});
+        .then((d) => {
+          if (n === epoch) setRows(d.channels);
+        })
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
+    };
     poll();
     const iv = setInterval(poll, 500);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      epoch++; // drop any response landing after unmount/cleanup
+    };
   }, []);
 
   const doPeek = () => {
@@ -55,9 +71,11 @@ export function RawTablePanel() {
               <td>{c.tag}</td>
               <td style={{ color: "var(--text-dim)" }}>{c.hw}</td>
               <td className="val" style={{ color: "var(--text)" }}>
-                {c.raw === null ? "—" : `${c.raw.toFixed(5)} V`}
+                {c.raw === null || !Number.isFinite(c.raw) ? "—" : `${c.raw.toFixed(5)} V`}
               </td>
-              <td className="val">{c.value === null ? "—" : c.value.toFixed(3)}</td>
+              <td className="val">
+                {c.value === null || !Number.isFinite(c.value) ? "—" : c.value.toFixed(3)}
+              </td>
               <td className="unit">{c.unit}</td>
               <td style={{ textAlign: "right", color: "var(--text-faint)" }}>{c.rate_hz} Hz</td>
             </tr>

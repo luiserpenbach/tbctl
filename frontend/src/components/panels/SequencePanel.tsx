@@ -18,20 +18,27 @@ export function SequencePanel() {
   const status = useStore((s) => s.status);
   const [sequences, setSequences] = useState<SequenceInfo[]>([]);
   const [selected, setSelected] = useState("");
+  // M23: ARM/FIRE confirm strings and gating follow the sequence the DEVICE
+  // has loaded, not the dropdown selection (which only drives LOAD)
+  const [loadedName, setLoadedName] = useState<string | null>(null);
   const [report, setReport] = useState<CompileReport | null>(null);
   const [pending, setPending] = useState<Pending>(null);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  useEffect(() => {
+  const refreshSequences = useCallback(() => {
     fetchSequences()
       .then((r) => {
         setSequences(r.sequences);
         const loaded = r.sequences.find((s) => s.loaded);
-        if (loaded) setSelected(loaded.name);
-        else if (r.sequences.length) setSelected(r.sequences[0].name);
+        setLoadedName(loaded?.name ?? null);
+        setSelected((cur) => cur || (loaded?.name ?? r.sequences[0]?.name ?? ""));
       })
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    refreshSequences();
+  }, [refreshSequences]);
 
   const doAbort = useCallback(() => {
     abortSequence().catch((e) => setErr(String(e)));
@@ -53,20 +60,42 @@ export function SequencePanel() {
   }, [doAbort]);
 
   const state = seq?.state ?? "—";
+  const crc = seq?.crc16 ?? 0;
   const controlEnabled = status?.control_enabled ?? false;
+
+  // re-sync which sequence is loaded whenever the device (re)loads a table
+  // (crc16 changes — possibly from another client) or stands down to IDLE
+  useEffect(() => {
+    if (state === "LOADED" || state === "IDLE") refreshSequences();
+  }, [state, crc, refreshSequences]);
+
+  // a pending confirm is only valid for the state it was offered in — if the
+  // live state moves on (another client, terminal state), cancel it (M23)
+  useEffect(() => {
+    setPending((p) =>
+      (p === "arm" && state !== "LOADED") || (p === "fire" && state !== "ARMED") ? null : p,
+    );
+  }, [state]);
+
   const run = async (fn: () => Promise<unknown>) => {
+    if (busy) return; // double-submit guard
+    setBusy(true);
     setErr("");
     try {
       await fn();
     } catch (e) {
       setErr(String(e).replace(/^Error: /, ""));
+    } finally {
+      setBusy(false);
     }
   };
 
   const doLoad = () =>
     run(async () => {
       setReport(null);
-      setReport((await loadSequence(selected)) as CompileReport);
+      const rep = (await loadSequence(selected)) as CompileReport;
+      setReport(rep);
+      setLoadedName(rep.name ?? selected);
     });
 
   const progress =
@@ -90,7 +119,7 @@ export function SequencePanel() {
             </option>
           ))}
         </select>
-        <button className="btn" onClick={doLoad} disabled={!selected || state === "RUNNING"}>
+        <button className="btn" onClick={doLoad} disabled={!selected || busy || state === "RUNNING"}>
           LOAD
         </button>
         {status?.checklist && (
@@ -105,28 +134,44 @@ export function SequencePanel() {
         {pending !== "arm" ? (
           <button
             className="btn"
-            disabled={state !== "LOADED" || !controlEnabled}
+            disabled={state !== "LOADED" || !controlEnabled || !loadedName || busy}
             title={!controlEnabled ? "enable control mode first" : ""}
             onClick={() => setPending("arm")}
           >
             ARM
           </button>
         ) : (
-          <button className="btn confirm" onClick={() => run(async () => armSequence(selected)).then(() => setPending(null))}>
-            CONFIRM ARM {selected}?
+          <button
+            className="btn confirm"
+            disabled={busy || state !== "LOADED" || !controlEnabled || !loadedName}
+            onClick={() =>
+              run(async () => armSequence(loadedName!)).then(() => setPending(null))
+            }
+          >
+            CONFIRM ARM {loadedName ?? "?"}?
           </button>
         )}
         {pending !== "fire" ? (
-          <button className="btn" disabled={state !== "ARMED"} onClick={() => setPending("fire")}>
+          <button
+            className="btn"
+            disabled={state !== "ARMED" || !loadedName || busy}
+            onClick={() => setPending("fire")}
+          >
             FIRE
           </button>
         ) : (
-          <button className="btn confirm" onClick={() => run(async () => fireSequence(selected)).then(() => setPending(null))}>
-            CONFIRM FIRE {selected}?
+          <button
+            className="btn confirm"
+            disabled={busy || state !== "ARMED" || !loadedName}
+            onClick={() =>
+              run(async () => fireSequence(loadedName!)).then(() => setPending(null))
+            }
+          >
+            CONFIRM FIRE {loadedName ?? "?"}?
           </button>
         )}
         {["DONE", "ABORTED", "FAULT", "LOADED"].includes(state) && (
-          <button className="btn" onClick={() => run(resetSequence)}>
+          <button className="btn" disabled={busy} onClick={() => run(resetSequence)}>
             RESET
           </button>
         )}
@@ -164,6 +209,11 @@ export function SequencePanel() {
           {state}
           {seq && seq.error !== "NONE" ? ` — ${seq.error}` : ""}
         </span>
+        {loadedName && (
+          <span className="chip" title="sequence loaded on the device">
+            ● {loadedName}
+          </span>
+        )}
         {(state === "RUNNING" || state === "ABORTING") && (
           <span className="chip">
             step {seq?.cur_step ?? 0} · {((seq?.elapsed_ms ?? 0) / 1000).toFixed(2)} s

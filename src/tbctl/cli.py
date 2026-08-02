@@ -11,6 +11,7 @@ from pathlib import Path
 def cmd_validate(args: argparse.Namespace) -> int:
     from tbctl.config.loader import ConfigError, load_config_dir
     from tbctl.config.models import dio_number
+    from tbctl.services.compiler import compile_sequence
 
     config_dir = Path(args.config_dir)
     try:
@@ -35,12 +36,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
             f"     bit {dio_number(c.hw):2d}  {c.hw:5s}  {c.tag}  ({c.kind}, fail_safe={c.fail_safe})"
         )
     for name, s in bundle.sequences.items():
+        # load_config_dir already compiled every sequence; recompile here for
+        # the human-readable report (durations, warnings)
+        compiled = compile_sequence(s.model, chmap)
         print(
             f"OK {s.path}  sha256={s.sha256[:16]}…  "
-            f"({len(s.model.steps)} steps, {len(s.model.abort)} abort)"
+            f"({len(s.model.steps)} steps, {len(s.model.abort)} abort; compiled "
+            f"{compiled.duration_ms} ms main / {compiled.abort_duration_ms} ms abort, "
+            f"crc16=0x{compiled.table.crc16:04X})"
         )
         if s.model.allow_unsafe_end:
             print(f"   WARNING: {name} sets allow_unsafe_end=true")
+        for w in compiled.warnings:
+            print(f"   WARNING: {name}: {w}")
     for _name, d in bundle.dashboards.items():
         print(f"OK {d.path}  sha256={d.sha256[:16]}…  ({len(d.model.panels)} panels)")
     print("all configs valid")
@@ -134,7 +142,7 @@ def cmd_soak(args: argparse.Namespace) -> int:
     end = t0 + args.hours * 3600.0
     try:
         while time.time() < end:
-            time.sleep(min(60.0, end - time.time()))
+            time.sleep(max(0.0, min(60.0, end - time.time())))
             st = api("/api/status")
             if not st["recording"]["active"]:
                 print("FAIL: recording stopped unexpectedly", file=sys.stderr)
@@ -194,7 +202,13 @@ def cmd_deploy_lua(args: argparse.Namespace) -> int:
         return 0
     except ScriptLoadError as e:
         print(f"deploy failed: {e}", file=sys.stderr)
-        debug = read_debug(dev)
+        # read_debug is best-effort: if the handle dropped it must not mask
+        # the original ScriptLoadError diagnostics
+        try:
+            debug = read_debug(dev)
+        except Exception as dbg_err:
+            print(f"(LUA_DEBUG unavailable: {dbg_err})", file=sys.stderr)
+            debug = ""
         if debug:
             print(f"LUA_DEBUG:\n{debug}", file=sys.stderr)
         return 1

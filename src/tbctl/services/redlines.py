@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 
@@ -89,9 +90,17 @@ class RedlineWatcher:
             values = block[:, loc[1]]
             for k in range(len(values)):
                 v = float(values[k])
-                violated = (rl.min is not None and v < rl.min) or (
-                    rl.max is not None and v > rl.max
-                )
+                if not math.isfinite(v):
+                    # A redlined sensor producing NaN/inf (dead channel, failed
+                    # derived expression, LJM dummy sample) cannot be shown to
+                    # be within limits — treat it as a violation and keep the
+                    # persistence streak, never as an in-bounds sample that
+                    # silently resets the streak.
+                    violated = True
+                else:
+                    violated = (rl.min is not None and v < rl.min) or (
+                        rl.max is not None and v > rl.max
+                    )
                 if not violated:
                     self._first_violation.pop(idx, None)
                     continue
@@ -102,7 +111,25 @@ class RedlineWatcher:
 
     def _trip(self, rl: Redline, value: float) -> None:
         self._tripped = True
-        limit = f"min {rl.min}" if (rl.min is not None and value < rl.min) else f"max {rl.max}"
+        if not math.isfinite(value):
+            limit = "non-finite"
+        elif rl.min is not None and value < rl.min:
+            limit = f"min {rl.min}"
+        else:
+            limit = f"max {rl.max}"
+        reason = f"redline {rl.tag} {limit}"
+        log.error("REDLINE %s = %.3f (%s) — aborting", rl.tag, value, limit)
+        # Command the abort FIRST, before any blocking work: the event log does
+        # a synchronous JSONL append + recorder HDF5 fan-out which can stall the
+        # loop for hundreds of ms on a busy SD card — that latency must not be
+        # added ahead of the tank-overpressure abort.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # listener always runs in the loop thread; fallback for direct tests
+            asyncio.run(self._abort(reason))
+        else:
+            self._abort_task = loop.create_task(self._abort(reason))
         self._events.log(
             "redline_tripped",
             tag=rl.tag,
@@ -110,15 +137,6 @@ class RedlineWatcher:
             limit=limit,
             persist_ms=rl.persist_ms,
         )
-        log.error("REDLINE %s = %.3f (%s) — aborting", rl.tag, value, limit)
-        reason = f"redline {rl.tag} {limit}"
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # listener always runs in the loop thread; fallback for direct tests
-            asyncio.run(self._abort(reason))
-            return
-        self._abort_task = loop.create_task(self._abort(reason))
 
     # -- introspection ------------------------------------------------------
 

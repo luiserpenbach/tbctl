@@ -287,17 +287,31 @@ export function ChannelsEditor() {
       .then((r) => r.json())
       .then((d) => setCfg(d.config))
       .catch((e) => setMsg(String(e)));
+    // in-flight + out-of-order guards on the raw poll: a slow response must
+    // not overwrite a fresher one (and polls must not pile up)
+    let epoch = 0;
+    let inFlight = false;
     const iv = setInterval(() => {
+      if (inFlight) return;
+      const n = ++epoch;
+      inFlight = true;
       fetch("/api/raw")
         .then((r) => r.json())
         .then((d) => {
+          if (n !== epoch) return;
           const m: Record<string, number> = {};
           for (const row of d.channels) if (row.raw !== null) m[row.tag] = row.raw;
           setRaws(m);
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
     }, 700);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      epoch++;
+    };
   }, []);
 
   if (!cfg) return <div className="placeholder">loading…</div>;
@@ -370,7 +384,9 @@ export function ChannelsEditor() {
                     : "—"}
               </td>
               <td className="val">
-                {raws[c.tag] !== undefined ? `${evalCal(c.cal, raws[c.tag]).toFixed(2)}` : "—"}
+                {raws[c.tag] !== undefined && Number.isFinite(evalCal(c.cal, raws[c.tag]))
+                  ? `${evalCal(c.cal, raws[c.tag]).toFixed(2)}`
+                  : "—"}
               </td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button className="panel-btn" onClick={() => setEditing(c)}>⚙</button>

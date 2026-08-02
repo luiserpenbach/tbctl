@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import random
 import struct
+import threading
 import time
 from collections.abc import Callable
 
@@ -77,6 +78,10 @@ class LuaSequencerSim:
         self.spark_guard_ms = 0
         self.spark_mask = 0
         self.crc = 0
+        # boot-persistent: set on the first successful LOAD, never cleared
+        # (survives RESET/FAULT). Gates every DIO write so a first-boot FAULT
+        # never drives the lines before the inhibit mask has been programmed.
+        self.dio_configured = False
         self.cur_step = 0  # 1-based index of next step (main or abort)
         self.elapsed_ms = 0
         self.spark_on_ms = 0
@@ -102,6 +107,13 @@ class LuaSequencerSim:
     def _apply_word(self, word: int) -> None:
         self._m.apply_dio_masked(word, self.dio_inhibit)
 
+    # NOTE: the mock intentionally does NOT model the interpreter-overrun abort
+    # (LJ.CheckInterval backlog > 250 ticks -> OVERRUN) or the abort-batch-drop
+    # timing. The lazy fake-clock tick cannot distinguish elapsed wall time from
+    # a processing stall, so modelling it would corrupt the heartbeat-loss and
+    # catch-up tests. Those device paths are covered by the real-Lua harness
+    # (tests/lua/run_sequencer_tests.lua).
+
     def _start_abort(self, error: SeqError) -> None:
         self.state = SeqState.ABORTING
         self.error = error
@@ -118,14 +130,25 @@ class LuaSequencerSim:
 
     def _cmd_load(self) -> None:
         raw = self._m.fifo_drain()
+        self._m._regs[_NAME_OF["FIFO_ALLOCATE"]] = 0.0  # Lua frees the FIFO after parse
         ok = self._parse(raw)
         if ok:
+            self.dio_configured = True  # inhibit/direction now programmed
             self.state = SeqState.LOADED
             self.error = SeqError.NONE
         else:
+            # rejected table: the previous table's identity is gone (a reload is
+            # required regardless) and DIO is only driven safe if a prior LOAD
+            # already programmed the inhibit mask — otherwise first-boot FAULT
+            # would drive un-inhibited lines.
+            self.n_steps = self.n_abort = 0
+            self.crc = 0
+            self.cur_step = 0
+            self.elapsed_ms = 0
             self.state = SeqState.FAULT
             self.error = SeqError.BAD_TABLE
-            self._apply_word(self.safe_word)
+            if self.dio_configured:
+                self._apply_word(self.safe_word)
         self._publish()
 
     def _parse(self, raw: bytes) -> bool:
@@ -173,8 +196,14 @@ class LuaSequencerSim:
         if cmd == Cmd.NOP:
             return
         m._regs[_NAME_OF["CMD"]] = 0.0  # consume
-        if cmd == Cmd.LOAD and self.state == SeqState.IDLE:
-            self._cmd_load()
+        if cmd == Cmd.LOAD:
+            if self.state == SeqState.IDLE:
+                self._cmd_load()
+            else:
+                # refused, but still drain+free the FIFO so it doesn't stay
+                # allocated+full starving the shared heap (L5)
+                self._m.fifo_drain()
+                m._regs[_NAME_OF["FIFO_ALLOCATE"]] = 0.0
         elif cmd == Cmd.ARM and self.state == SeqState.LOADED:
             if int(m._regs.get(_NAME_OF["ARM_CODE"], 0)) == ARM_MAGIC:
                 m._regs[_NAME_OF["ARM_CODE"]] = 0.0
@@ -192,18 +221,27 @@ class LuaSequencerSim:
         elif cmd == Cmd.ABORT:
             if self.state == SeqState.RUNNING:
                 self._start_abort(SeqError.HOST_ABORT)
-            elif self.state == SeqState.ARMED:
+            elif self.state in (SeqState.ARMED, SeqState.DONE):
+                # ARMED or DONE (incl. allow_unsafe_end) -> drive safe, ABORTED
                 self._apply_word(self.safe_word)
                 self.state = SeqState.ABORTED
                 self.error = SeqError.HOST_ABORT
                 self._publish()
+            elif self.state == SeqState.FAULT:
+                # de-energize if the inhibit mask was ever programmed; stay FAULT
+                if self.dio_configured:
+                    self._apply_word(self.safe_word)
+                self._publish()
         elif cmd == Cmd.RESET and self.state in (
             SeqState.LOADED,
+            SeqState.ARMED,
             SeqState.DONE,
             SeqState.ABORTED,
             SeqState.FAULT,
         ):
-            if self.n_steps:
+            # RESET from ARMED is a clean stand-down (M6); safe word applied on
+            # any RESET once DIO has been configured this boot
+            if self.dio_configured:
                 self._apply_word(self.safe_word)
             self.state = SeqState.IDLE
             self.error = SeqError.NONE
@@ -274,6 +312,16 @@ class LuaSequencerSim:
                 self._apply_word(self.abort_w[i - 1])
                 i += 1
             self.cur_step = i
+            # spark guard also runs during ABORTING (L7): force the mask bits
+            # low if held on too long, without restarting the abort or changing
+            # state/error
+            if self.spark_guard_ms and self.spark_mask:
+                if self._m.dio_word16() & self.spark_mask:
+                    self.spark_on_ms += 1
+                    if self.spark_on_ms > self.spark_guard_ms:
+                        self._apply_word(self._m.dio_word16() & ~self.spark_mask & 0xFFFF)
+                else:
+                    self.spark_on_ms = 0
             if self.cur_step > self.n_abort:
                 self._apply_word(self.safe_word)  # hold safe word
                 self.state = SeqState.ABORTED
@@ -295,6 +343,11 @@ class MockDevice:
         self._chmap = chmap
         self._clock = clock or time.monotonic
         self._rng = random.Random(seed)
+        # the mock is driven concurrently from the event loop, the to_thread
+        # stream reader and FastAPI threadpool endpoints; serialize the lazy
+        # tick + register file so a status read racing a stream read can't
+        # double-advance the embedded Lua. Re-entrant: read/write call advance.
+        self._lock = threading.RLock()
         self._open = False
         self._regs: dict[str, float] = {}
         self._dio_state = 0  # u32 electrical image
@@ -343,14 +396,15 @@ class MockDevice:
 
     def advance(self) -> None:
         """Advance the embedded Lua to 'now' in 1 ms virtual ticks."""
-        now = self._clock()
-        dt_ms = int((now - self._last_advance) * 1000.0)
-        if dt_ms <= 0:
-            return
-        dt_ms = min(dt_ms, self.MAX_CATCHUP_MS)
-        self._last_advance = now
-        for _ in range(dt_ms):
-            self._lua.tick()
+        with self._lock:
+            now = self._clock()
+            dt_ms = int((now - self._last_advance) * 1000.0)
+            if dt_ms <= 0:
+                return
+            dt_ms = min(dt_ms, self.MAX_CATCHUP_MS)
+            self._last_advance = now
+            for _ in range(dt_ms):
+                self._lua.tick()
 
     # ----------------------------------------------------------- DIO image
     def apply_dio_masked(self, word16: int, inhibit16: int) -> None:
@@ -392,6 +446,10 @@ class MockDevice:
         return eu
 
     def read_name(self, name: str) -> float:
+        with self._lock:
+            return self._read_name_locked(name)
+
+    def _read_name_locked(self, name: str) -> float:
         self.advance()
         if name in self._by_hw and isinstance(self._by_hw[name], ValveChannel | SparkChannel):
             return float((self._dio_state >> dio_number(name)) & 1)
@@ -406,9 +464,14 @@ class MockDevice:
         return self._regs.get(name, 0.0)
 
     def read_names(self, names: list[str]) -> list[float]:
-        return [self.read_name(n) for n in names]
+        with self._lock:
+            return [self._read_name_locked(n) for n in names]
 
     def write_name(self, name: str, value: float) -> None:
+        with self._lock:
+            self._write_name_locked(name, value)
+
+    def _write_name_locked(self, name: str, value: float) -> None:
         self.advance()
         if name in self._by_hw and isinstance(self._by_hw[name], ValveChannel | SparkChannel):
             bit = dio_number(name)
@@ -430,15 +493,17 @@ class MockDevice:
             self._lua.poll_cmd()
 
     def write_names(self, names: list[str], values: list[float]) -> None:
-        for n, v in zip(names, values, strict=True):
-            self.write_name(n, v)
+        with self._lock:
+            for n, v in zip(names, values, strict=True):
+                self._write_name_locked(n, v)
 
     def write_name_array(self, name: str, values: list[int]) -> None:
-        self.advance()
-        if name != _NAME_OF["FIFO_DATA"]:
-            raise ValueError(f"array write only supported for FIFO data, got {name}")
-        for w in values:
-            self._fifo += int(w).to_bytes(2, "little")
+        with self._lock:
+            self.advance()
+            if name != _NAME_OF["FIFO_DATA"]:
+                raise ValueError(f"array write only supported for FIFO data, got {name}")
+            for w in values:
+                self._fifo += int(w).to_bytes(2, "little")
 
     def write_name_bytes(self, name: str, data: bytes) -> None:
         # Real hardware uses this for LUA_SOURCE_WRITE; the mock's Lua is
@@ -480,20 +545,24 @@ class MockDevice:
         if not self._scan_names:
             raise RuntimeError("stream not started")
         n = self._scans_per_read
-        target = (self._stream_idx + n) / self._scan_rate
-        wait = self._stream_t0 + target - self._clock()
+        with self._lock:
+            target = (self._stream_idx + n) / self._scan_rate
+            wait = self._stream_t0 + target - self._clock()
+        # sleep OUTSIDE the lock so a status read doesn't block for a scan
+        # interval waiting on the stream reader
         if wait > 0:
             time.sleep(wait)
-        self.advance()
-        block = np.empty((n, len(self._scan_names)), dtype=np.float64)
-        for i in range(n):
-            t = self._stream_t0 + (self._stream_idx + i) / self._scan_rate
-            for j, name in enumerate(self._scan_names):
-                block[i, j] = self._volts_for(self._by_hw[name], t)
-        self._stream_idx += n
-        # backlog: scans generated but not yet fetched beyond this block
-        avail = int((self._clock() - self._stream_t0) * self._scan_rate) - self._stream_idx
-        return block, max(0, avail)
+        with self._lock:
+            self.advance()
+            block = np.empty((n, len(self._scan_names)), dtype=np.float64)
+            for i in range(n):
+                t = self._stream_t0 + (self._stream_idx + i) / self._scan_rate
+                for j, name in enumerate(self._scan_names):
+                    block[i, j] = self._volts_for(self._by_hw[name], t)
+            self._stream_idx += n
+            # backlog: scans generated but not yet fetched beyond this block
+            avail = int((self._clock() - self._stream_t0) * self._scan_rate) - self._stream_idx
+            return block, max(0, avail)
 
     def stream_stop(self) -> None:
         self._scan_names = []

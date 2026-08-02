@@ -12,8 +12,9 @@ from tests.conftest import CONFIGS
 
 
 @pytest.fixture
-async def app_ctx():
-    ctx = build_context(CONFIGS, sim=True)
+async def app_ctx(tmp_path):
+    # keep run/event files out of the repo tree (was creating ./logs/)
+    ctx = build_context(CONFIGS, sim=True, data_dir=tmp_path / "runs", log_dir=tmp_path / "logs")
     app = build_app(ctx)
     # run lifespan manually so acquisition + ws hub start
     async with app.router.lifespan_context(app):

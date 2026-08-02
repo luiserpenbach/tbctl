@@ -25,29 +25,34 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
 
   useEffect(() => {
     setRunPts(null);
-    if (isHistory && viewMode.mode === "run" && xTag && yTag) {
-      fetchRunData(viewMode.run.run_id, [xTag, yTag], 4000)
-        .then((r) => {
-          const sx = r.series[xTag];
-          const sy = r.series[yTag];
-          if (!sx?.t.length || !sy?.t.length) return;
-          const joined = uPlot.join([
-            [sx.t, sx.mean] as uPlot.AlignedData,
-            [sy.t, sy.mean] as uPlot.AlignedData,
-          ]);
-          const xs: number[] = [];
-          const ys: number[] = [];
-          const [, jx, jy] = joined as unknown as [number[], number[], number[]];
-          for (let i = 0; i < jx.length; i++) {
-            if (jx[i] != null && jy[i] != null) {
-              xs.push(jx[i]);
-              ys.push(jy[i]);
-            }
+    if (!(isHistory && viewMode.mode === "run" && xTag && yTag)) return;
+    let cancelled = false; // stale-guard (M22): late data from a previous run
+    fetchRunData(viewMode.run.run_id, [xTag, yTag], 4000)
+      .then((r) => {
+        if (cancelled) return;
+        const sx = r.series[xTag];
+        const sy = r.series[yTag];
+        if (!sx?.t.length || !sy?.t.length) return;
+        const joined = uPlot.join([
+          [sx.t, sx.mean] as uPlot.AlignedData,
+          [sy.t, sy.mean] as uPlot.AlignedData,
+        ]);
+        const xs: number[] = [];
+        const ys: number[] = [];
+        const [, jx, jy] = joined as unknown as [number[], number[], number[]];
+        for (let i = 0; i < jx.length; i++) {
+          // non-finite values would poison the Math.min/max axis ranges
+          if (Number.isFinite(jx[i]) && Number.isFinite(jy[i])) {
+            xs.push(jx[i]);
+            ys.push(jy[i]);
           }
-          setRunPts([xs, ys]);
-        })
-        .catch(() => {});
-    }
+        }
+        setRunPts([xs, ys]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [isHistory, viewMode.mode === "run" ? viewMode.run.run_id : "", xTag, yTag]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -80,7 +85,9 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
         const [t, jx, jy] = data;
         const cutoff = (buffers.latestTime() ?? 0) - windowS;
         for (let i = 0; i < t.length; i++) {
-          if (t[i] >= cutoff && jx[i] != null && jy[i] != null) {
+          // Number.isFinite also rejects null/NaN — non-finite values would
+          // poison the Math.min/max axis ranges
+          if (t[i] >= cutoff && Number.isFinite(jx[i]) && Number.isFinite(jy[i])) {
             xs.push(jx[i] as number);
             ys.push(jy[i] as number);
           }

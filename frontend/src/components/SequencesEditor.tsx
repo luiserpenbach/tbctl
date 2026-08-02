@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BoundCfg, SequenceConfig, SequenceInfo, TimelineData, ValidateOk } from "../api";
 import { fetchSequenceConfig, fetchSequences, saveSequence, validateSequence } from "../api";
 import { useStore } from "../store";
@@ -10,7 +10,41 @@ import { isReadable, type ChannelInfo } from "../types";
 // the *compiled* table (carry-forward full-state words) — what you see is
 // literally what fires.
 
-const num = (s: string): number | undefined => (s === "" ? undefined : parseFloat(s) || 0);
+// M25: garbage must never silently become a bound of 0 (a redline `min: 0`
+// could be saved during the debounce window) — empty/invalid ⇒ undefined
+const num = (s: string): number | undefined => {
+  if (s.trim() === "") return undefined;
+  const v = parseFloat(s);
+  return Number.isFinite(v) ? v : undefined;
+};
+
+// Numeric input that keeps the raw text while focused and only commits
+// parseable values — clearing the field mid-edit no longer snaps to 0 (M25).
+function NumInput({
+  value,
+  onCommit,
+  int,
+  ...rest
+}: {
+  value: number;
+  onCommit: (v: number) => void;
+  int?: boolean;
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type">) {
+  const [text, setText] = useState<string | null>(null); // null = mirror prop
+  return (
+    <input
+      {...rest}
+      type="number"
+      value={text ?? String(value)}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = int ? parseInt(e.target.value, 10) : parseFloat(e.target.value);
+        if (Number.isFinite(v)) onCommit(v);
+      }}
+      onBlur={() => setText(null)}
+    />
+  );
+}
 
 function shortTag(tag: string): string {
   const i = tag.indexOf(".");
@@ -76,13 +110,12 @@ function StepsTable({
           <tr key={i}>
             <td style={{ color: "var(--text-faint)" }}>{i}</td>
             <td>
-              <input
+              <NumInput
                 className="modal-input seq-t"
-                type="number"
                 step="0.01"
                 min="0"
                 value={s.t}
-                onChange={(e) => setT(i, parseFloat(e.target.value) || 0)}
+                onCommit={(v) => setT(i, v)}
               />
             </td>
             {outputs.map((o) => {
@@ -196,12 +229,12 @@ function BoundsTable({
             </td>
             {persist && (
               <td>
-                <input
+                <NumInput
                   className="modal-input seq-t"
-                  type="number"
+                  int
                   min="0"
                   value={r.persist_ms ?? 50}
-                  onChange={(e) => upd(i, { persist_ms: parseInt(e.target.value) || 0 })}
+                  onCommit={(v) => upd(i, { persist_ms: v })}
                 />
               </td>
             )}
@@ -362,13 +395,20 @@ export function SequencesEditor() {
     refreshList();
   }, []);
 
+  // M25: epoch counter guards the debounced dry-run against races — a slow
+  // response for an older config (or another sequence) must never display
+  const valEpoch = useRef(0);
+
   const select = async (name: string) => {
     try {
       const r = await fetchSequenceConfig(name);
+      valEpoch.current++; // discard any in-flight validation of the old sequence
       setSelected(name);
       setCfg(r.config);
       setEditable(r.editable);
       setDirty(false);
+      setResult(null); // stale timeline/report for another sequence must not linger
+      setErrors([]);
       setMsg(r.editable ? "" : "read-only: this sequence is loaded on the device (reset to edit)");
     } catch (e) {
       setMsg(String(e));
@@ -378,8 +418,10 @@ export function SequencesEditor() {
   // debounced dry-run compile -> report + timeline, or per-field errors
   useEffect(() => {
     if (!cfg) return;
+    const epoch = ++valEpoch.current;
     const h = setTimeout(() => {
       validateSequence(cfg).then((r) => {
+        if (epoch !== valEpoch.current) return; // stale response (M25)
         if (r.ok) {
           setResult(r);
           setErrors([]);
@@ -434,10 +476,13 @@ export function SequencesEditor() {
         <button
           className="btn"
           onClick={() => {
+            valEpoch.current++;
             setSelected(null);
             setCfg(freshSequence(outputs));
             setEditable(true);
             setDirty(true);
+            setResult(null);
+            setErrors([]);
             setMsg("");
           }}
         >
@@ -467,14 +512,13 @@ export function SequencesEditor() {
               onChange={(e) => upd({ description: e.target.value })}
             />
             <span>max duration s</span>
-            <input
+            <NumInput
               className="modal-input"
               style={{ width: 60, flex: "none" }}
-              type="number"
               min="0.1"
               value={cfg.max_duration_s}
               disabled={!editable}
-              onChange={(e) => upd({ max_duration_s: parseFloat(e.target.value) || 0 })}
+              onCommit={(v) => upd({ max_duration_s: v })}
             />
             <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 12 }}>
               <input

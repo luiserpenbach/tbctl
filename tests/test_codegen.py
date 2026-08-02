@@ -53,6 +53,53 @@ def test_generated_files_in_sync():
     assert codegen.generate(check=True) == 0
 
 
+def test_spec_validation_current_spec_passes():
+    codegen.validate_spec(codegen.load_spec())
+
+
+def test_spec_validation_rejects_nonunit_tick_ms():
+    """F4: the Lua compares ms limits directly to tick counts; tick_ms must be 1."""
+    spec = codegen.load_spec()
+    spec["constants"]["tick_ms"] = 2
+    with pytest.raises(ValueError, match="tick_ms"):
+        codegen.validate_spec(spec)
+
+
+def test_spec_validation_rejects_fifo_smaller_than_max_table():
+    """F2: raising max_steps past FIFO capacity must fail codegen."""
+    spec = codegen.load_spec()
+    spec["constants"]["max_steps"] = 256  # 12 + 2*256*6 + 2 = 3086 B > 2048 B
+    with pytest.raises(ValueError, match="allocate_bytes"):
+        codegen.validate_spec(spec)
+    spec = codegen.load_spec()
+    spec["fifo"]["table_upload"]["allocate_bytes"] = 1549  # one byte short of 1550
+    with pytest.raises(ValueError, match="allocate_bytes"):
+        codegen.validate_spec(spec)
+
+
+def test_spec_validation_rejects_slot_without_lua_key():
+    """F1: adding a registers.yaml slot with no Lua counterpart must fail codegen."""
+    spec = codegen.load_spec()
+    spec["slots"]["host_to_lua"]["NEW_SLOT"] = {"slot": "USER_RAM10_U16", "desc": "x"}
+    with pytest.raises(ValueError, match="NEW_SLOT"):
+        codegen.validate_spec(spec)
+
+
+def test_spec_validation_rejects_constant_without_lua_key():
+    spec = codegen.load_spec()
+    spec["constants"]["new_limit_ms"] = 5
+    with pytest.raises(ValueError, match="NEW_LIMIT_MS"):
+        codegen.validate_spec(spec)
+
+
+def test_spec_validation_rejects_stale_lua_keys():
+    """F1 reverse direction: a Lua key whose spec entry was removed must fail."""
+    spec = codegen.load_spec()
+    del spec["slots"]["host_to_lua"]["HB_TIMEOUT_MS"]
+    with pytest.raises(ValueError, match="HB_TIMEOUT_MS"):
+        codegen.validate_spec(spec)
+
+
 def test_generated_python_importable():
     from tbctl.hw import registers_gen as rg
 

@@ -14,9 +14,23 @@ export function DashboardTabs() {
   const setDashboards = useStore((s) => s.setDashboards);
   const editMode = useStore((s) => s.editMode);
 
-  const open = async (name: string) => {
-    setDashboard(await fetchDashboard(name));
-    localStorage.setItem("tbctl.dashboard", name);
+  const open = async (name: string, force = false) => {
+    // M26: switching tabs replaces the in-store dashboard — while editing,
+    // that silently discards unsaved layout changes. Ask first.
+    if (
+      !force &&
+      editMode &&
+      dashboard &&
+      dashboard.name !== name &&
+      !confirm(`switching tabs discards unsaved layout edits to "${dashboard.name}" — continue?`)
+    )
+      return;
+    try {
+      setDashboard(await fetchDashboard(name));
+      localStorage.setItem("tbctl.dashboard", name);
+    } catch (e) {
+      alert(String(e));
+    }
   };
 
   const create = async (copyFrom?: string) => {
@@ -25,25 +39,29 @@ export function DashboardTabs() {
       if (name) alert("name must be [a-zA-Z0-9_-]+");
       return;
     }
-    const base = copyFrom
-      ? await fetchDashboard(copyFrom)
-      : { name, grid: { cols: 12, row_height_px: 40 }, panels: [] };
-    await post(`/api/dashboards/${name}`, { ...base, name });
-    setDashboards((await fetchDashboards()).dashboards);
-    await open(name);
+    try {
+      const base = copyFrom
+        ? await fetchDashboard(copyFrom)
+        : { name, grid: { cols: 12, row_height_px: 40 }, panels: [] };
+      await post(`/api/dashboards/${name}`, { ...base, name });
+      setDashboards((await fetchDashboards()).dashboards);
+      await open(name);
+    } catch (e) {
+      alert(String(e));
+    }
   };
 
   const remove = async (name: string) => {
     if (!confirm(`delete dashboard ${name}?`)) return;
     try {
       await del(`/api/dashboards/${name}`);
+      const rest = (await fetchDashboards()).dashboards;
+      setDashboards(rest);
+      // the deleted tab was current: its edits are gone with it — no prompt
+      if (dashboard?.name === name && rest.length) await open(rest[0], true);
     } catch (e) {
       alert(String(e));
-      return;
     }
-    const rest = (await fetchDashboards()).dashboards;
-    setDashboards(rest);
-    if (dashboard?.name === name && rest.length) await open(rest[0]);
   };
 
   return (

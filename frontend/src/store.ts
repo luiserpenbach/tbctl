@@ -17,6 +17,7 @@ interface TbctlStore {
   channels: ChannelInfo[];
   seqStatus: SeqStatusMsg | null;
   wsConnected: boolean;
+  wsGeneration: number; // bumped on every WS (re)connect — consumers re-backfill
   lastSeqStatusAt: number; // ms epoch of last WS seq_status (heartbeat health)
   dashboard: DashboardConfig | null;
   dashboards: string[];
@@ -40,6 +41,7 @@ interface TbctlStore {
   setChannels: (c: ChannelInfo[]) => void;
   setSeqStatus: (s: SeqStatusMsg) => void;
   setWsConnected: (b: boolean) => void;
+  bumpWsGeneration: () => void;
   setDashboard: (d: DashboardConfig) => void;
   setDashboards: (names: string[]) => void;
   setEditMode: (b: boolean) => void;
@@ -56,6 +58,7 @@ export const useStore = create<TbctlStore>((set) => ({
   channels: [],
   seqStatus: null,
   wsConnected: false,
+  wsGeneration: 0,
   lastSeqStatusAt: 0,
   dashboard: null,
   dashboards: [],
@@ -95,6 +98,7 @@ export const useStore = create<TbctlStore>((set) => ({
     set({ seqStatus, lastSeqStatusAt: Date.now() });
   },
   setWsConnected: (wsConnected) => set({ wsConnected }),
+  bumpWsGeneration: () => set((s) => ({ wsGeneration: s.wsGeneration + 1 })),
   setDashboard: (dashboard) => set({ dashboard }),
   setDashboards: (dashboards) => set({ dashboards }),
   setEditMode: (editMode) => set({ editMode }),

@@ -113,6 +113,37 @@ def load_spec() -> dict:
     return yaml.safe_load(REGISTERS_YAML.read_text())
 
 
+def validate_spec(spec: dict) -> None:
+    """Hard-fail codegen on spec edits the Lua side cannot honor (F1/F2/F4).
+
+    Raises ValueError with an actionable message; called by generate() so a
+    bad registers.yaml can never silently produce desynced artifacts.
+    """
+    c = spec["constants"]
+    # F4: lua/sequencer_main.lua compares millisecond values (heartbeat age,
+    # spark guard ms, the 3600000 ms step cap, the 250/1000-tick overrun and
+    # clamp thresholds) DIRECTLY against tick counts. That arithmetic is only
+    # correct at 1 ms per tick.
+    if c["tick_ms"] != 1:
+        raise ValueError(
+            f"constants.tick_ms={c['tick_ms']}: lua/sequencer_main.lua compares millisecond "
+            "limits directly to tick counts, which is only correct when tick_ms == 1. "
+            "Changing the tick period requires rewriting the sequencer's timing arithmetic, "
+            "not just this constant."
+        )
+    # F2: the FIFO must hold one maximal table upload:
+    #   header + (max_steps main + max_steps abort) * step_bytes + CRC trailer.
+    need = c["header_bytes"] + 2 * c["max_steps"] * c["step_bytes"] + c["trailer_bytes"]
+    alloc = spec["fifo"]["table_upload"]["allocate_bytes"]
+    if alloc < need:
+        raise ValueError(
+            f"fifo.table_upload.allocate_bytes={alloc} cannot hold a max-size table: "
+            f"header {c['header_bytes']} + 2*{c['max_steps']}*{c['step_bytes']} step bytes "
+            f"+ trailer {c['trailer_bytes']} = {need} B. Raise allocate_bytes or lower max_steps."
+        )
+    _check_lua_coverage(spec)
+
+
 def resolve_all(spec: dict, ljm: LjmConstants) -> dict[str, Register]:
     """Resolve every symbolic slot + fifo register to a concrete Register."""
     resolved: dict[str, Register] = {}
@@ -192,6 +223,11 @@ def gen_python(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> 
 
 # Short keys for lua/sequencer_main.lua (must stay in sync with that file).
 # Enums are inlined as numeric literals there to save heap; only A/K remain.
+# The 1-char keys are load-bearing identifiers in sequencer_main.lua, so this
+# map cannot be derived mechanically from registers.yaml -- instead
+# _check_lua_coverage() fails codegen whenever the spec and these maps drift
+# (F1): adding a slot or constant to registers.yaml without a Lua key here is
+# a hard error, never a silent desync.
 _LUA_ADDR_KEYS = {
     "CMD": "q",
     "ARM_CODE": "a",
@@ -226,6 +262,45 @@ _LUA_CONST_KEYS = {
     "ALLOCATE_BYTES": "a",
 }
 
+# Fixed device registers the Lua writes directly; not registers.yaml slots.
+_LUA_DIRECT_REGS = frozenset({"DIO_STATE", "DIO_INHIBIT", "DIO_DIRECTION"})
+# Constants that come from spec sections other than `constants`.
+_LUA_EXTRA_CONSTS = frozenset({"INTERP_VERSION", "ALLOCATE_BYTES"})
+
+
+def _check_lua_coverage(spec: dict) -> None:
+    """F1: every registers.yaml entry must have a Lua short key, and vice versa."""
+    slot_names = {n for d in ("host_to_lua", "lua_to_host") for n in spec["slots"][d]}
+    slot_names |= {"FIFO_DATA", "FIFO_ALLOCATE", "FIFO_BYTES_IN", "FIFO_EMPTY"}
+    lua_slots = set(_LUA_ADDR_KEYS) - _LUA_DIRECT_REGS
+    if missing := sorted(slot_names - lua_slots):
+        raise ValueError(
+            f"registers.yaml slots with no Lua counterpart in codegen._LUA_ADDR_KEYS: {missing}. "
+            "Assign each a 1-char key there and use it from lua/sequencer_main.lua."
+        )
+    if stale := sorted(lua_slots - slot_names):
+        raise ValueError(
+            f"codegen._LUA_ADDR_KEYS entries no longer present in registers.yaml: {stale}"
+        )
+    const_names = set(_LUA_EXTRA_CONSTS) | {
+        "ARM_MAGIC" if k == "arm_magic" else k.upper() for k in spec["constants"]
+    }
+    if missing := sorted(const_names - set(_LUA_CONST_KEYS)):
+        raise ValueError(
+            f"registers.yaml constants with no Lua counterpart in codegen._LUA_CONST_KEYS: "
+            f"{missing}. Assign each a 1-char key there."
+        )
+    if stale := sorted(set(_LUA_CONST_KEYS) - const_names):
+        raise ValueError(
+            f"codegen._LUA_CONST_KEYS entries no longer present in registers.yaml: {stale}"
+        )
+    for label, mapping in (
+        ("_LUA_ADDR_KEYS", _LUA_ADDR_KEYS),
+        ("_LUA_CONST_KEYS", _LUA_CONST_KEYS),
+    ):
+        if len(set(mapping.values())) != len(mapping):
+            raise ValueError(f"duplicate 1-char key in codegen.{label}")
+
 
 def gen_lua(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> str:
     # Everything hangs off one table `U` so nested functions close over a single
@@ -240,10 +315,7 @@ def gen_lua(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> str
         "U.A = {",
     ]
     for logical, key in _LUA_ADDR_KEYS.items():
-        if logical in ("DIO_STATE", "DIO_INHIBIT", "DIO_DIRECTION"):
-            reg = ljm.resolve(logical)
-        else:
-            reg = resolved[logical]
+        reg = ljm.resolve(logical) if logical in _LUA_DIRECT_REGS else resolved[logical]
         lines.append(f"  {key}={reg.address},")
     lines.append("}")
     consts = spec["constants"]
@@ -290,6 +362,7 @@ def gen_sequencer(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) 
 def generate(check: bool = False) -> int:
     ljm = LjmConstants(find_constants_file())
     spec = load_spec()
+    validate_spec(spec)
     resolved = resolve_all(spec, ljm)
     outputs = {
         PY_OUT: gen_python(spec, resolved, ljm),

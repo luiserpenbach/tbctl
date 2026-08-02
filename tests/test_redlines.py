@@ -97,7 +97,7 @@ async def test_redline_trips_and_aborts(node):
     await ctx.sequencer.load("rl_test")
     await ctx.sequencer.arm("rl_test", control_enabled=True)
     assert ctx.sequencer.redlines.armed
-    await ctx.sequencer.fire("rl_test")
+    await ctx.sequencer.fire("rl_test", control_enabled=True)
     await asyncio.sleep(0.3)
     assert ctx.sequencer.state() == SeqState.RUNNING
 
@@ -123,7 +123,7 @@ async def test_redline_debounce_ignores_short_spike(node):
     await asyncio.sleep(0.3)
     await ctx.sequencer.load("rl_test")
     await ctx.sequencer.arm("rl_test", control_enabled=True)
-    await ctx.sequencer.fire("rl_test")
+    await ctx.sequencer.fire("rl_test", control_enabled=True)
     await asyncio.sleep(0.2)
 
     ctx.iface.sim_set("pressure.chamber", 30.0, noise_sigma_eu=0.0)

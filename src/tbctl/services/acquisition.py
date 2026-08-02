@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 import time
 from collections.abc import Callable
 
@@ -32,6 +33,11 @@ from tbctl.services.thermocouple import compensated_temp_degc
 log = logging.getLogger(__name__)
 
 CJC_POLL_S = 1.0  # cold-junction temperature refresh interval
+# LJM eStreamRead emits this placeholder for scans lost to stream
+# auto-recovery. A real AIN reading never sits below the ±10 V range, so any
+# sample this far negative is a dummy and must not be calibrated/recorded.
+LJM_DUMMY_SENTINEL = -9999.0
+_DUMMY_THRESHOLD = -9000.0
 
 
 class RingBuffer:
@@ -46,6 +52,11 @@ class RingBuffer:
         self._write = 0  # next write slot
         self._count = 0
         self._col = {tag: i for i, tag in enumerate(self.tags)}
+        # append() runs on the event loop; window()/latest()/_ordered() run on
+        # FastAPI threadpool threads. Without this lock a reader can observe a
+        # torn wraparound window with non-monotonic timestamps, which then
+        # breaks the searchsorted slicing in window().
+        self._lock = threading.Lock()
 
     def append(self, t: np.ndarray, block: np.ndarray) -> None:
         n = len(t)
@@ -55,16 +66,18 @@ class RingBuffer:
             t, block = t[-self.capacity :], block[-self.capacity :]
             n = self.capacity
         idx = (self._write + np.arange(n)) % self.capacity
-        self._t[idx] = t
-        self._v[idx] = block
-        self._write = int((self._write + n) % self.capacity)
-        self._count = min(self._count + n, self.capacity)
+        with self._lock:
+            self._t[idx] = t
+            self._v[idx] = block
+            self._write = int((self._write + n) % self.capacity)
+            self._count = min(self._count + n, self.capacity)
 
     def _ordered(self) -> tuple[np.ndarray, np.ndarray]:
-        if self._count < self.capacity:
-            return self._t[: self._count], self._v[: self._count]
-        idx = (self._write + np.arange(self.capacity)) % self.capacity
-        return self._t[idx], self._v[idx]
+        with self._lock:
+            if self._count < self.capacity:
+                return self._t[: self._count].copy(), self._v[: self._count].copy()
+            idx = (self._write + np.arange(self.capacity)) % self.capacity
+            return self._t[idx], self._v[idx]
 
     def window(self, t0: float, t1: float | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Samples with t0 < t <= t1 (copies), oldest first."""
@@ -80,6 +93,13 @@ class RingBuffer:
         if len(t) == 0:
             return {}
         return {tag: float(v[-1, i]) for tag, i in self._col.items()}
+
+    def latest_time(self) -> float | None:
+        with self._lock:
+            if self._count == 0:
+                return None
+            last = (self._write - 1) % self.capacity
+            return float(self._t[last])
 
     def columns(self, tags: list[str]) -> list[int]:
         return [self._col[t] for t in tags]
@@ -143,6 +163,9 @@ class AcquisitionService:
         self._stream_epoch = 0.0
         self._samples_in = 0
         self.dropped_scans = 0
+        # wall-clock time of the last ingested block, for staleness checks that
+        # must be robust to the synthetic sample-index timebase drifting
+        self._last_ingest_wall: float | None = None
         self._capacity_s = capacity_s
         # listeners get (group_name, t_epoch, eu_block) after every ingest;
         # survive reconfigure() so the recorder hook stays attached
@@ -251,7 +274,23 @@ class AcquisitionService:
                 continue
             if backlog > self.scan_rate_hz:  # >1 s behind
                 log.warning("stream backlog %d scans", backlog)
-            self._ingest(block)
+            # Refresh the cold-junction temperature off the event loop — a real
+            # LJM register read is a device round-trip and must never block the
+            # loop (it would starve the heartbeat and the abort endpoint).
+            now = time.time()
+            if now - self._cj_read_at > CJC_POLL_S:
+                self._cj_read_at = now
+                try:
+                    cj = await asyncio.to_thread(self._iface.read_name, "TEMPERATURE_DEVICE_K")
+                    self._cj_degc = cj - 273.15
+                except Exception:
+                    log.debug("CJC read failed", exc_info=True)
+            # An unexpected ingest error must not kill the acquisition task (it
+            # would silently freeze telemetry and later re-raise out of stop()).
+            try:
+                self._ingest(block)
+            except Exception:
+                log.exception("ingest failed; dropping block")
 
     # -- data path ---------------------------------------------------------
 
@@ -259,11 +298,13 @@ class AcquisitionService:
         n = len(volts)
         if n == 0:
             return
-        now = time.time()
-        if now - self._cj_read_at > CJC_POLL_S:
-            self._cj_read_at = now
-            with contextlib.suppress(Exception):
-                self._cj_degc = self._iface.read_name("TEMPERATURE_DEVICE_K") - 273.15
+        # Drop LJM stream-recovery placeholder samples before they can be
+        # calibrated (x gain -> huge bogus EU), recorded, or redline-evaluated.
+        dummy = volts < _DUMMY_THRESHOLD
+        if dummy.any():
+            self.dropped_scans += int(dummy.any(axis=1).sum())
+            volts = np.where(dummy, np.nan, volts)
+        self._last_ingest_wall = time.time()
         idx = self._samples_in + np.arange(n)
         t = self._stream_epoch + idx / self.scan_rate_hz
         eu = np.empty_like(volts)
@@ -333,20 +374,35 @@ class AcquisitionService:
             out[tag] = envelope_decimate(t, v[:, col], max_points)
         return out
 
-    def frames_since(self, t_last: float, tags: list[str] | None = None) -> list[dict]:
-        """Raw new samples per rate group since t_last, for WS `frame` messages."""
+    def frames_since(
+        self,
+        since: float | dict[str, float],
+        tags: list[str] | None = None,
+        default_t: float = 0.0,
+    ) -> list[dict]:
+        """Raw new samples per rate group, for WS `frame` messages.
+
+        `since` is either a single watermark applied to every group, or a
+        per-group ``{group: t_last}`` dict (with `default_t` for groups not yet
+        seen). A per-group watermark is required so a slower group whose samples
+        arrive a little behind the fastest group is not skipped by a single
+        shared cursor that the fast group has already advanced past. Each frame
+        carries its `group` so the caller can advance the right watermark.
+        """
         frames = []
-        for ring in self.rings.values():
+        for group, ring in self.rings.items():
             sel = [tag for tag in ring.tags if tags is None or tag in tags]
             if not sel:
                 continue
-            t, v = ring.window(t_last)
+            since_g = since.get(group, default_t) if isinstance(since, dict) else since
+            t, v = ring.window(since_g)
             if len(t) == 0:
                 continue
             cols = ring.columns(sel)
             frames.append(
                 {
                     "type": "frame",
+                    "group": group,
                     "t0": float(t[0]),
                     "dt": 1.0 / ring.rate_hz,
                     "t": t.tolist(),
@@ -361,6 +417,13 @@ class AcquisitionService:
         for ring in self.rings.values():
             out.update(ring.latest())
         return out
+
+    def last_sample_age(self) -> float | None:
+        """Seconds since the last block was ingested (wall clock), or None if
+        nothing has arrived yet. Used to reject arming on frozen telemetry."""
+        if self._last_ingest_wall is None:
+            return None
+        return max(0.0, time.time() - self._last_ingest_wall)
 
     def latest_raw(self) -> dict[str, float]:
         """Most recent raw voltage per input tag (pre-calibration)."""

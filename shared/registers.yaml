@@ -75,7 +75,11 @@ fifo:
     allocate_register: USER_RAM_FIFO0_ALLOCATE_NUM_BYTES
     bytes_in_fifo_register: USER_RAM_FIFO0_NUM_BYTES_IN_FIFO
     empty_register: USER_RAM_FIFO0_EMPTY
-    allocate_bytes: 2048   # max table: 10B header + 256*6B steps + 2B CRC = 1548 B
+    # Max single upload: 12 B header + (128 main + 128 abort) * 6 B steps
+    # + 2 B CRC trailer = 1550 B. Codegen asserts allocate_bytes >=
+    # header_bytes + 2*max_steps*step_bytes + trailer_bytes (all from
+    # `constants` below), so raising max_steps past FIFO capacity fails codegen.
+    allocate_bytes: 2048
 
 # ---------------------------------------------------------------------------
 # Shared enums (identical numeric values in Python and Lua).

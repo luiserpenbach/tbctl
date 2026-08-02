@@ -109,7 +109,18 @@ def evaluate_run(review: ReviewConfig, path: Path) -> dict:
                 t0, t1 = fire  # type: ignore[misc]
                 lo = int(np.searchsorted(t, t0, "left"))
                 hi = len(t) if t1 is None else int(np.searchsorted(t, t1, "right"))
-                v = v[lo:hi]
+                vw = v[lo:hi]
+                # A clean DONE run has no explicit engine-shutdown event, so the
+                # fire window can end marginally past the last recorded sample
+                # (event wall-clock vs sample-index timebase). Rather than
+                # spuriously skip a rule with a whole run of data, fall back to
+                # the full recording instead of an empty window.
+                if len(vw) == 0:
+                    log.warning(
+                        "rule %s: empty fire window, evaluating over full recording", rule.name
+                    )
+                else:
+                    v = vw
             if len(v) == 0 or bool(np.all(np.isnan(v))):
                 row["skipped"] = "no samples in window"
                 continue
@@ -135,7 +146,11 @@ def evaluate_run(review: ReviewConfig, path: Path) -> dict:
 
 
 def store_report(path: Path, report: dict) -> None:
-    with h5py.File(path, "r+") as f:
+    # share the recorder's write lock: a run's HDF5 must never be opened "r+"
+    # concurrently (report rerun vs. meta patch), h5py is not thread-safe
+    from tbctl.services.recorder import HDF5_WRITE_LOCK
+
+    with HDF5_WRITE_LOCK, h5py.File(path, "r+") as f:
         f.attrs[REPORT_ATTR] = json.dumps(report)
 
 

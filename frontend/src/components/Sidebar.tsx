@@ -154,10 +154,15 @@ export function Sidebar() {
                 const val = isOutput
                   ? (status?.outputs[c.tag] ?? "—")
                   : fmt(buffers.latest(c.tag));
+                // H8: a frozen stream must not render styled as live here either
+                const stale = !isOutput && buffers.isStale(c.tag);
                 return (
                   <div key={c.tag} className={`chan ${isOutput ? "output" : ""}`} title={c.hw}>
                     <span>{c.tag.slice(ns.length + 1)}</span>
-                    <span className="val">
+                    <span
+                      className={`val ${stale ? "stale" : ""}`}
+                      title={stale ? "no fresh data" : undefined}
+                    >
                       {val} {c.unit ?? ""}
                     </span>
                   </div>
@@ -172,7 +177,7 @@ export function Sidebar() {
 }
 
 function fmt(v: number | null): string {
-  if (v === null) return "—";
+  if (v === null || !Number.isFinite(v)) return "—"; // never render "NaN"
   const a = Math.abs(v);
   return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2);
 }
