@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="monospace">
+  <!-- GH2/GOX feed-system P&ID background. Static plumbing only: live
+       valves/sensors are overlaid by the pid panel at normalized coords. -->
+  <defs>
+    <marker id="arr" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#7a8699"/>
+    </marker>
+  </defs>
+  <g stroke="#7a8699" stroke-width="2.5" fill="none">
+    <!-- N2 bottle (top center) -->
+    <rect x="455" y="30" width="90" height="130" rx="18"/>
+    <line x1="500" y1="160" x2="500" y2="240"/>
+    <!-- purge line tees left and right into the manifolds -->
+    <line x1="290" y1="240" x2="710" y2="240"/>
+    <line x1="290" y1="240" x2="290" y2="330"/>
+    <line x1="710" y1="240" x2="710" y2="330"/>
+
+    <!-- OX tank (left) -->
+    <rect x="60" y="180" width="110" height="180" rx="22"/>
+    <!-- ox feed: tank -> pre valve -> main valve -> manifold -->
+    <line x1="170" y1="330" x2="290" y2="330"/>
+    <line x1="290" y1="330" x2="290" y2="430"/>
+    <!-- ox vent up from tank -->
+    <line x1="115" y1="180" x2="115" y2="100"/>
+    <line x1="115" y1="100" x2="180" y2="100" marker-end="url(#arr)"/>
+
+    <!-- FUEL tank (right) -->
+    <rect x="830" y="180" width="110" height="180" rx="22"/>
+    <line x1="830" y1="330" x2="710" y2="330"/>
+    <line x1="710" y1="330" x2="710" y2="430"/>
+    <!-- fuel vent -->
+    <line x1="885" y1="180" x2="885" y2="100"/>
+    <line x1="885" y1="100" x2="820" y2="100" marker-end="url(#arr)"/>
+
+    <!-- injector manifolds into chamber -->
+    <line x1="290" y1="430" x2="290" y2="480"/>
+    <line x1="710" y1="430" x2="710" y2="480"/>
+    <line x1="290" y1="480" x2="460" y2="500"/>
+    <line x1="710" y1="480" x2="540" y2="500"/>
+
+    <!-- thrust chamber (bottom center): injector head + converging nozzle -->
+    <path d="M460 490 L540 490 L540 540 L525 555 L545 590 L455 590 L475 555 L460 540 z"/>
+  </g>
+  <g fill="#7a8699" font-size="17">
+    <text x="500" y="105" text-anchor="middle">N2</text>
+    <text x="115" y="280" text-anchor="middle">GOX</text>
+    <text x="885" y="280" text-anchor="middle">GH2</text>
+    <text x="500" y="615" text-anchor="middle" font-size="14">thrust</text>
+  </g>
+</svg>

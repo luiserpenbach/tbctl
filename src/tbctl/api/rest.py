@@ -47,6 +47,11 @@ class ConnectionSwitch(BaseModel):
     ip: str | None = None
 
 
+class PidAssetUpload(BaseModel):
+    name: str
+    svg: str
+
+
 def build_router(ctx: NodeContext) -> APIRouter:
     r = APIRouter(prefix="/api")
 
@@ -490,6 +495,105 @@ def build_router(ctx: NodeContext) -> APIRouter:
         if errors:
             raise HTTPException(422, [{"loc": "sequences", "msg": m} for m in errors])
         return await apply_channels(ctx, chmap, payload)
+
+    # ---------------------------------------------------- P&ID (phase 13)
+
+    _PID_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+    _ASSET_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
+    def _pid_assets_dir():
+        return ctx.config_dir / "pid" / "assets"
+
+    @r.get("/pid")
+    def pid_list() -> dict:
+        return {
+            "pids": [
+                {
+                    "name": name,
+                    "background": p.model.background,
+                    "n_elements": len(p.model.elements),
+                }
+                for name, p in sorted(ctx.bundle.pids.items())
+            ]
+        }
+
+    @r.get("/pid/assets")
+    def pid_assets() -> dict:
+        d = _pid_assets_dir()
+        return {"assets": sorted(p.name for p in d.glob("*.svg")) if d.is_dir() else []}
+
+    @r.post("/pid/assets")
+    def pid_asset_upload(body: PidAssetUpload) -> dict:
+        from tbctl.services.config_editor import sanitize_svg
+
+        if not _ASSET_NAME_RE.match(body.name):
+            raise HTTPException(400, "asset name must be [a-zA-Z0-9_-]+ (no extension)")
+        if problems := sanitize_svg(body.svg):
+            raise HTTPException(422, [{"loc": "svg", "msg": m} for m in problems])
+        d = _pid_assets_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{body.name}.svg"
+        (d / fname).write_text(body.svg)
+        ctx.events.log("pid_asset_uploaded", asset=fname, bytes=len(body.svg))
+        return {"ok": True, "asset": fname}
+
+    @r.get("/pid/assets/{fname}")
+    def pid_asset_get(fname: str):
+        from fastapi.responses import Response
+
+        if not re.match(r"^[a-zA-Z0-9_\-]+\.svg$", fname):
+            raise HTTPException(400, "bad asset name")
+        path = _pid_assets_dir() / fname
+        if not path.is_file():
+            raise HTTPException(404, f"no asset {fname!r}")
+        return Response(path.read_text(), media_type="image/svg+xml")
+
+    @r.get("/pid/{name}")
+    def pid_get(name: str) -> dict:
+        if name not in ctx.bundle.pids:
+            raise HTTPException(404, f"unknown pid {name!r}")
+        loaded = ctx.bundle.pids[name]
+        return {
+            "config": loaded.model.model_dump(exclude_none=True),
+            "sha256": loaded.sha256,
+            "path": str(loaded.path),
+        }
+
+    @r.post("/pid/{name}")
+    def pid_save(name: str, payload: dict) -> dict:
+        from pydantic import ValidationError
+
+        from tbctl.services.config_editor import apply_pid, validate_pid_payload
+
+        if not _PID_NAME_RE.match(name) or name == "assets":
+            raise HTTPException(400, f"bad pid name {name!r}")
+        payload["name"] = name  # save-as: the URL wins
+        try:
+            _, errors = validate_pid_payload(ctx, payload)
+        except ValidationError as e:
+            raise HTTPException(
+                422,
+                [
+                    {"loc": ".".join(str(x) for x in err["loc"]), "msg": err["msg"]}
+                    for err in e.errors()
+                ],
+            ) from e
+        if errors:
+            raise HTTPException(422, [{"loc": "channels", "msg": m} for m in errors])
+        return apply_pid(ctx, name, payload)
+
+    @r.delete("/pid/{name}")
+    def pid_delete(name: str) -> dict:
+        if name not in ctx.bundle.pids:
+            raise HTTPException(404, f"unknown pid {name!r}")
+        from tbctl.services.config_editor import backup_file
+
+        path = ctx.bundle.pids[name].path
+        backup_file(path)
+        path.unlink(missing_ok=True)
+        del ctx.bundle.pids[name]
+        ctx.events.log("pid_deleted", pid=name)
+        return {"ok": True}
 
     # -------------------------------------------------------- connection
 

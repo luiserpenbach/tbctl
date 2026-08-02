@@ -4,6 +4,7 @@ import { AlarmBanner } from "./components/AlarmBanner";
 import { ChannelsEditor } from "./components/ChannelsEditor";
 import { DashboardGrid } from "./components/DashboardGrid";
 import { DashboardTabs } from "./components/DashboardTabs";
+import { PidEditor } from "./components/PidEditor";
 import { SequencesEditor } from "./components/SequencesEditor";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
@@ -44,6 +45,7 @@ export default function App() {
           )}
           {view === "channels" && <ChannelsEditor />}
           {view === "sequences" && <SequencesEditor />}
+          {view === "pid" && <PidEditor />}
         </main>
       </div>
     </div>

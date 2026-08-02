@@ -24,9 +24,9 @@ interface TbctlStore {
   runs: RunMeta[];
   viewMode: ViewMode;
   events: EventRecord[];
-  view: "dashboard" | "channels" | "sequences";
+  view: "dashboard" | "channels" | "sequences" | "pid";
 
-  setView: (v: "dashboard" | "channels" | "sequences") => void;
+  setView: (v: "dashboard" | "channels" | "sequences" | "pid") => void;
   pushEvent: (e: EventRecord) => void;
   setEvents: (e: EventRecord[]) => void;
   setRuns: (r: RunMeta[]) => void;

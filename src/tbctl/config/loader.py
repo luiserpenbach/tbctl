@@ -13,7 +13,14 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from tbctl.config.models import ChannelMap, Dashboard, Sequence, cross_validate_sequence
+from tbctl.config.models import (
+    ChannelMap,
+    Dashboard,
+    PidConfig,
+    Sequence,
+    cross_validate_pid,
+    cross_validate_sequence,
+)
 
 
 class ConfigError(Exception):
@@ -94,11 +101,23 @@ def load_dashboard(path: Path) -> Loaded[Dashboard]:
         raise ConfigError(_format_validation_error(path, e)) from e
 
 
+def load_pid(path: Path, chmap: ChannelMap | None = None) -> Loaded[PidConfig]:
+    data, sha = _read_yaml(path)
+    try:
+        pid = PidConfig.model_validate(data)
+    except ValidationError as e:
+        raise ConfigError(_format_validation_error(path, e)) from e
+    if chmap is not None and (errors := cross_validate_pid(pid, chmap)):
+        raise ConfigError("\n".join(f"{path}: {msg}" for msg in errors))
+    return Loaded(pid, sha, path)
+
+
 @dataclass
 class ConfigBundle:
     channels: Loaded[ChannelMap]
     sequences: dict[str, Loaded[Sequence]] = field(default_factory=dict)
     dashboards: dict[str, Loaded[Dashboard]] = field(default_factory=dict)
+    pids: dict[str, Loaded[PidConfig]] = field(default_factory=dict)
 
 
 def load_config_dir(config_dir: Path) -> ConfigBundle:
@@ -110,19 +129,20 @@ def load_config_dir(config_dir: Path) -> ConfigBundle:
     for sub, loader, target in (
         ("sequences", load_sequence, bundle.sequences),
         ("dashboards", load_dashboard, bundle.dashboards),
+        ("pid", load_pid, bundle.pids),
     ):
         d = config_dir / sub
         if not d.is_dir():
             continue
         for path in sorted(d.glob("*.yaml")):
             try:
-                if loader is load_sequence:
-                    loaded = load_sequence(path, channels.model)
+                if loader in (load_sequence, load_pid):
+                    loaded = loader(path, channels.model)
                 else:
                     loaded = loader(path)
                 name = loaded.model.name
                 if name in target:
-                    errors.append(f"{path}: duplicate {sub[:-1]} name {name!r}")
+                    errors.append(f"{path}: duplicate {sub.rstrip('s')} name {name!r}")
                 else:
                     target[name] = loaded
             except ConfigError as e:

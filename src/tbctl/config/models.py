@@ -390,6 +390,92 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# P&ID mimic (roadmap v2 phase 13): background SVG + channel-bound elements.
+# Positions are normalized 0-1 against the background image box so the
+# panel scales with panel size.
+# ---------------------------------------------------------------------------
+
+_ASSET_RE = re.compile(r"^[a-zA-Z0-9_\-]+\.svg$")
+
+
+class PidValveElement(StrictModel):
+    id: str
+    type: Literal["valve"]
+    channel: str  # must be an output channel (valve or spark)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    size: float = Field(default=0.05, gt=0, le=0.5)  # fraction of canvas width
+    rotation: float = Field(default=0.0, ge=-360, le=360)
+
+
+class PidSensorElement(StrictModel):
+    id: str
+    type: Literal["sensor"]
+    channel: str  # must be an input channel
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    decimals: int = Field(default=1, ge=0, le=5)
+    warn_min: float | None = None
+    warn_max: float | None = None
+
+
+class PidLabelElement(StrictModel):
+    id: str
+    type: Literal["label"]
+    text: str
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    size: float = Field(default=0.022, gt=0, le=0.2)  # font height, fraction of width
+
+
+PidElement = Annotated[
+    PidValveElement | PidSensorElement | PidLabelElement,
+    Field(discriminator="type"),
+]
+
+
+class PidConfig(StrictModel):
+    name: str
+    background: str | None = None  # asset filename under configs/pid/assets/
+    elements: list[PidElement] = []
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", v):
+            raise ValueError(f"pid name {v!r} must be [a-zA-Z0-9_-]+")
+        return v
+
+    @field_validator("background")
+    @classmethod
+    def _background(cls, v: str | None) -> str | None:
+        # plain filename only — no path separators, must be an .svg asset
+        if v is not None and not _ASSET_RE.match(v):
+            raise ValueError(f"background {v!r} must be a plain <name>.svg asset filename")
+        return v
+
+    @model_validator(mode="after")
+    def _validate(self) -> PidConfig:
+        ids = [e.id for e in self.elements]
+        if dupes := {i for i in ids if ids.count(i) > 1}:
+            raise ValueError(f"duplicate element ids: {sorted(dupes)}")
+        return self
+
+
+def cross_validate_pid(pid: PidConfig, chmap: ChannelMap) -> list[str]:
+    """Channel-map-dependent checks. Returns a list of error strings."""
+    errors: list[str] = []
+    output_tags = {c.tag for c in chmap.outputs()}
+    input_tags = {c.tag for c in chmap.inputs()}
+    for e in pid.elements:
+        if isinstance(e, PidValveElement) and e.channel not in output_tags:
+            errors.append(f"element {e.id}: {e.channel!r} is not an output channel")
+        if isinstance(e, PidSensorElement) and e.channel not in input_tags:
+            errors.append(f"element {e.id}: {e.channel!r} is not an input channel")
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # §4.3 dashboard
 # ---------------------------------------------------------------------------
 
@@ -401,6 +487,7 @@ PanelType = Literal[
     "recorder_panel",
     "raw_table",
     "sim_panel",
+    "pid",
 ]
 
 
@@ -430,6 +517,7 @@ class Panel(StrictModel):
     h: int = Field(ge=1)
     channels: list[str] = []  # tags or glob patterns (value_table)
     y_axis: YAxisConfig = YAxisConfig()
+    pid: str | None = None  # which P&ID config a `pid` panel shows
 
 
 class Dashboard(StrictModel):

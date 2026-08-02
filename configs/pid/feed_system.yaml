@@ -1,0 +1,24 @@
+# P&ID mimic for the sim feed system (roadmap phase 13). Coordinates are
+# normalized 0-1 against the background SVG box; edit via the P&ID editor.
+name: feed_system
+background: feed_system.svg
+elements:
+  # ox side
+  - {id: v_ox_vent, type: valve, channel: valve.ox_vent, x: 0.20, y: 0.161, size: 0.045}
+  - {id: v_ox_pre, type: valve, channel: valve.ox_pre, x: 0.235, y: 0.532, size: 0.045}
+  - {id: v_ox_main, type: valve, channel: valve.ox_main, x: 0.29, y: 0.629, size: 0.045, rotation: 90}
+  - {id: s_ox_tank, type: sensor, channel: pressure.ox_tank, x: 0.115, y: 0.65, decimals: 1}
+  - {id: s_ox_man, type: sensor, channel: pressure.ox_manifold, x: 0.355, y: 0.71, decimals: 2}
+  # fuel side
+  - {id: v_fuel_vent, type: valve, channel: valve.fuel_vent, x: 0.80, y: 0.161, size: 0.045}
+  - {id: v_fuel_main, type: valve, channel: valve.fuel_main, x: 0.71, y: 0.629, size: 0.045, rotation: 90}
+  - {id: s_fuel_tank, type: sensor, channel: pressure.fuel_tank, x: 0.885, y: 0.65, decimals: 1}
+  - {id: s_fuel_man, type: sensor, channel: pressure.fuel_manifold, x: 0.645, y: 0.71, decimals: 2}
+  # purge + chamber
+  - {id: v_purge, type: valve, channel: valve.purge, x: 0.50, y: 0.323, size: 0.045, rotation: 90}
+  - {id: s_n2, type: sensor, channel: pressure.n2_purge, x: 0.575, y: 0.16, decimals: 1}
+  - {id: spark, type: valve, channel: spark.igniter, x: 0.44, y: 0.855, size: 0.04}
+  - {id: s_pc, type: sensor, channel: pressure.chamber, x: 0.575, y: 0.875, decimals: 2, warn_max: 22.0}
+  - {id: s_twall, type: sensor, channel: temp.chamber_wall, x: 0.575, y: 0.935, decimals: 0, warn_max: 450}
+  - {id: s_thrust, type: sensor, channel: force.thrust, x: 0.425, y: 0.955, decimals: 1}
+  - {id: lbl_title, type: label, text: FEED SYSTEM, x: 0.06, y: 0.05, size: 0.024}

@@ -9,13 +9,21 @@ validates AND every existing sequence still cross-validates against it.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 
 import yaml
 
-from tbctl.config.loader import load_channels, load_sequence
-from tbctl.config.models import ChannelMap, Sequence, cross_validate_sequence, dio_number
+from tbctl.config.loader import load_channels, load_pid, load_sequence
+from tbctl.config.models import (
+    ChannelMap,
+    PidConfig,
+    Sequence,
+    cross_validate_pid,
+    cross_validate_sequence,
+    dio_number,
+)
 from tbctl.services.compiler import CompiledSequence, compile_sequence
 
 log = logging.getLogger(__name__)
@@ -49,6 +57,9 @@ def validate_channels_payload(ctx, payload: dict) -> tuple[ChannelMap, list[str]
     for name, loaded in ctx.bundle.sequences.items():
         for msg in cross_validate_sequence(loaded.model, chmap):
             errors.append(f"sequence {name}: {msg}")
+    for name, loaded in ctx.bundle.pids.items():
+        for msg in cross_validate_pid(loaded.model, chmap):
+            errors.append(f"pid {name}: {msg}")
     return chmap, errors
 
 
@@ -138,4 +149,62 @@ def apply_sequence(ctx, name: str, payload: dict) -> dict:
         backup=str(backup) if backup else None,
     )
     log.info("sequence %s saved (%d steps)", name, len(new_loaded.model.steps))
+    return {"ok": True, "sha256": new_loaded.sha256, "backup": str(backup) if backup else None}
+
+
+# ---------------------------------------------------------------------------
+# P&ID editor (roadmap v2 phase 13)
+# ---------------------------------------------------------------------------
+
+# Uploaded backgrounds are rendered inline in the operator client, so refuse
+# anything that could execute or embed foreign content.
+_SVG_FORBIDDEN = re.compile(
+    r"<\s*script|<\s*foreignObject|<\s*iframe|<\s*embed|<\s*object"
+    r"|\son[a-z]+\s*=|javascript:",
+    re.IGNORECASE,
+)
+SVG_MAX_BYTES = 2 * 1024 * 1024
+
+
+def sanitize_svg(content: str) -> list[str]:
+    """Returns a list of problems; [] = safe to store."""
+    problems = []
+    if len(content.encode()) > SVG_MAX_BYTES:
+        problems.append(f"SVG larger than {SVG_MAX_BYTES // 1024} KiB")
+    if "<svg" not in content[:4096].lower():
+        problems.append("not an SVG document (no <svg> root)")
+    if m := _SVG_FORBIDDEN.search(content):
+        problems.append(f"forbidden SVG content: {m.group(0).strip()!r}")
+    return problems
+
+
+def validate_pid_payload(ctx, payload: dict) -> tuple[PidConfig, list[str]]:
+    """Parse + cross-check an edited P&ID. Returns (model, errors)."""
+    pid = PidConfig.model_validate(payload)  # raises ValidationError -> 422
+    errors = cross_validate_pid(pid, ctx.bundle.channels.model)
+    if pid.background is not None:
+        asset = ctx.config_dir / "pid" / "assets" / pid.background
+        if not asset.is_file():
+            errors.append(f"background asset {pid.background!r} is not uploaded")
+    return pid, errors
+
+
+def apply_pid(ctx, name: str, payload: dict) -> dict:
+    """Write configs/pid/<name>.yaml (backing up any existing copy) and
+    reload it into the bundle. Caller has already validated the payload."""
+    path = ctx.config_dir / "pid" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = backup_file(path)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    new_loaded = load_pid(path, ctx.bundle.channels.model)
+    ctx.bundle.pids[name] = new_loaded
+
+    ctx.events.log(
+        "pid_saved",
+        pid=name,
+        sha256=new_loaded.sha256[:16],
+        backup=str(backup) if backup else None,
+        elements=len(new_loaded.model.elements),
+    )
+    log.info("pid %s saved (%d elements)", name, len(new_loaded.model.elements))
     return {"ok": True, "sha256": new_loaded.sha256, "backup": str(backup) if backup else None}

@@ -153,3 +153,53 @@ export const setManualValve = (tag: string, state: string) =>
 export const setControlMode = (enabled: boolean) => post("/api/control-mode", { enabled });
 export const fetchEvents = (limit = 100) =>
   get<{ events: EventRecord[] }>(`/api/events?limit=${limit}`);
+
+// ------------------------------------------------------------- P&ID (ph. 13)
+
+export type PidElement =
+  | {
+      id: string;
+      type: "valve";
+      channel: string;
+      x: number;
+      y: number;
+      size?: number;
+      rotation?: number;
+    }
+  | {
+      id: string;
+      type: "sensor";
+      channel: string;
+      x: number;
+      y: number;
+      decimals?: number;
+      warn_min?: number;
+      warn_max?: number;
+    }
+  | { id: string; type: "label"; text: string; x: number; y: number; size?: number };
+
+export interface PidConfigT {
+  name: string;
+  background?: string | null;
+  elements: PidElement[];
+}
+
+export interface PidInfo {
+  name: string;
+  background: string | null;
+  n_elements: number;
+}
+
+export const fetchPids = () => get<{ pids: PidInfo[] }>("/api/pid");
+export const fetchPid = (name: string) =>
+  get<{ config: PidConfigT; sha256: string }>(`/api/pid/${name}`);
+export const savePid = (name: string, body: PidConfigT) =>
+  post<{ ok: boolean; backup: string | null }>(`/api/pid/${name}`, body);
+export const deletePid = async (name: string) => {
+  const r = await fetch(`/api/pid/${name}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+};
+export const fetchPidAssets = () => get<{ assets: string[] }>("/api/pid/assets");
+export const uploadPidAsset = (name: string, svg: string) =>
+  post<{ ok: boolean; asset: string }>("/api/pid/assets", { name, svg });

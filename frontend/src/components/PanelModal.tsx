@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { fetchPids } from "../api";
 import { useStore } from "../store";
 import type { PanelConfig } from "../types";
 
@@ -10,6 +11,7 @@ const PANEL_TYPES: PanelConfig["type"][] = [
   "recorder_panel",
   "raw_table",
   "sim_panel",
+  "pid",
 ];
 
 const NEEDS_CHANNELS = new Set(["timeseries", "value_table"]);
@@ -94,6 +96,18 @@ export function PanelModal({
   const [yMode, setYMode] = useState<"auto" | "manual">(panel?.y_axis.mode ?? "auto");
   const [yMin, setYMin] = useState(String(panel?.y_axis.min ?? 0));
   const [yMax, setYMax] = useState(String(panel?.y_axis.max ?? 10));
+  const [pidName, setPidName] = useState(panel?.pid ?? "");
+  const [pidList, setPidList] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (type === "pid")
+      fetchPids()
+        .then((r) => {
+          setPidList(r.pids.map((p) => p.name));
+          if (!pidName && r.pids[0]) setPidName(r.pids[0].name);
+        })
+        .catch(() => {});
+  }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!dashboard) return null;
 
@@ -102,8 +116,9 @@ export function PanelModal({
       yMode === "manual"
         ? { mode: "manual" as const, min: parseFloat(yMin), max: parseFloat(yMax) }
         : { mode: "auto" as const, min: null, max: null };
+    const pid = type === "pid" ? pidName || null : null;
     if (panel) {
-      updatePanel(panel.id, { channels, y_axis, type });
+      updatePanel(panel.id, { channels, y_axis, type, pid });
     } else {
       let n = 1;
       const ids = new Set(dashboard.panels.map((p) => p.id));
@@ -114,10 +129,11 @@ export function PanelModal({
         type,
         x: 0,
         y: bottom,
-        w: type === "timeseries" ? 8 : 4,
-        h: type === "timeseries" ? 7 : 5,
+        w: type === "timeseries" || type === "pid" ? 8 : 4,
+        h: type === "timeseries" ? 7 : type === "pid" ? 9 : 5,
         channels,
         y_axis,
+        pid,
       });
     }
     onClose();
@@ -149,6 +165,23 @@ export function PanelModal({
             onChange={setChannels}
             allowGlobs={type === "value_table"}
           />
+        )}
+        {type === "pid" && (
+          <div className="modal-row">
+            <span>P&amp;ID</span>
+            <select
+              className="seq-select"
+              value={pidName}
+              onChange={(e) => setPidName(e.target.value)}
+            >
+              {pidList.length === 0 && <option value="">none available</option>}
+              {pidList.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
         {type === "timeseries" && (
           <div className="modal-row">

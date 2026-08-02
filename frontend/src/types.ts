@@ -75,13 +75,15 @@ export interface PanelConfig {
     | "sequence_panel"
     | "recorder_panel"
     | "raw_table"
-    | "sim_panel";
+    | "sim_panel"
+    | "pid";
   x: number;
   y: number;
   w: number;
   h: number;
   channels: string[];
   y_axis: { mode: "auto" | "manual"; min: number | null; max: number | null };
+  pid?: string | null;
 }
 
 export interface RunMeta {
