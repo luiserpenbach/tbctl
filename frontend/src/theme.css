@@ -260,7 +260,34 @@ button.btn:focus-visible, input:focus-visible, select:focus-visible {
 .series-chip .legend-unit { color: var(--text-faint); margin-left: 2px; }
 .series-chip.off { opacity: 0.3; text-decoration: line-through; }
 
-.follow-btn { position: absolute; top: 4px; right: 6px; z-index: 5; font-size: 9.5px; padding: 1px 8px; }
+/* chart overlay toolbar: window presets + live-follow, Sift-style segments */
+.chart-toolbar {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 5;
+  display: inline-flex;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+.panel-body:hover .chart-toolbar { opacity: 1; }
+.win-btn {
+  background: #161616;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-right-width: 0;
+  padding: 1px 8px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.win-btn:first-child { border-radius: 2px 0 0 2px; }
+.win-btn:last-child { border-right-width: 1px; border-radius: 0 2px 2px 0; }
+.win-btn:hover { color: var(--text); background: var(--bg-hover); }
+.win-btn.active { background: var(--bg-invert); border-color: var(--bg-invert); color: var(--text-invert); font-weight: 600; }
+.win-btn.live { color: var(--green); border-color: var(--green); }
 
 /* value tables */
 .value-table { width: 100%; border-collapse: collapse; }

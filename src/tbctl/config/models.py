@@ -501,11 +501,15 @@ class YAxisConfig(StrictModel):
     mode: Literal["auto", "manual"] = "auto"
     min: float | None = None
     max: float | None = None
+    log: bool = False  # log10 y scale (positive data only)
+    label: str | None = None  # axis label, e.g. "pressure [bar]"
 
     @model_validator(mode="after")
     def _manual_bounds(self) -> YAxisConfig:
         if self.mode == "manual" and (self.min is None or self.max is None):
             raise ValueError("manual y_axis needs min and max")
+        if self.log and self.mode == "manual" and self.min is not None and self.min <= 0:
+            raise ValueError("log y_axis needs min > 0")
         return self
 
 
@@ -519,6 +523,9 @@ class Panel(StrictModel):
     channels: list[str] = []  # tags or glob patterns (value_table)
     y_axis: YAxisConfig = YAxisConfig()
     pid: str | None = None  # which P&ID config a `pid` panel shows
+    title: str | None = None  # custom header text (defaults to the type name)
+    window_s: float | None = Field(default=None, gt=0, le=600)  # live time window
+    show_legend: bool = True
 
 
 class Dashboard(StrictModel):

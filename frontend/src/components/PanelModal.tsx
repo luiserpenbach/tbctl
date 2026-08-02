@@ -32,8 +32,28 @@ function ChannelPicker({
   const [glob, setGlob] = useState("");
   const toggle = (tag: string) =>
     onChange(selected.includes(tag) ? selected.filter((t) => t !== tag) : [...selected, tag]);
+  const allSelected = inputs.length > 0 && inputs.every((c) => selected.includes(c.tag));
   return (
     <div className="chan-picker">
+      <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+        <span className="microlabel">Sensors</span>
+        <button
+          className="btn"
+          style={{ padding: "0 8px", fontSize: 9.5 }}
+          onClick={() =>
+            onChange(
+              allSelected
+                ? selected.filter((t) => !inputs.some((c) => c.tag === t))
+                : [...selected.filter((t) => t.includes("*")), ...inputs.map((c) => c.tag)],
+            )
+          }
+        >
+          {allSelected ? "Select none" : "Select all"}
+        </button>
+        <span style={{ fontSize: 10, color: "var(--text-faint)" }}>
+          {selected.filter((t) => !t.includes("*")).length}/{inputs.length}
+        </span>
+      </div>
       {allowGlobs && (
         <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
           <input
@@ -98,6 +118,11 @@ export function PanelModal({
   const [yMode, setYMode] = useState<"auto" | "manual">(panel?.y_axis.mode ?? "auto");
   const [yMin, setYMin] = useState(String(panel?.y_axis.min ?? 0));
   const [yMax, setYMax] = useState(String(panel?.y_axis.max ?? 10));
+  const [yLog, setYLog] = useState(panel?.y_axis.log ?? false);
+  const [yLabel, setYLabel] = useState(panel?.y_axis.label ?? "");
+  const [title, setTitle] = useState(panel?.title ?? "");
+  const [windowS, setWindowS] = useState(panel?.window_s ? String(panel.window_s) : "");
+  const [showLegend, setShowLegend] = useState(panel?.show_legend ?? true);
   const [pidName, setPidName] = useState(panel?.pid ?? "");
   const [pidList, setPidList] = useState<string[]>([]);
 
@@ -114,13 +139,21 @@ export function PanelModal({
   if (!dashboard) return null;
 
   const save = () => {
-    const y_axis =
-      yMode === "manual"
+    const y_axis = {
+      ...(yMode === "manual"
         ? { mode: "manual" as const, min: parseFloat(yMin), max: parseFloat(yMax) }
-        : { mode: "auto" as const, min: null, max: null };
+        : { mode: "auto" as const, min: null, max: null }),
+      log: yLog,
+      label: yLabel.trim() || null,
+    };
     const pid = type === "pid" ? pidName || null : null;
+    const extras = {
+      title: title.trim() || null,
+      window_s: windowS ? parseFloat(windowS) : null,
+      show_legend: showLegend,
+    };
     if (panel) {
-      updatePanel(panel.id, { channels, y_axis, type, pid });
+      updatePanel(panel.id, { channels, y_axis, type, pid, ...extras });
     } else {
       let n = 1;
       const ids = new Set(dashboard.panels.map((p) => p.id));
@@ -136,6 +169,7 @@ export function PanelModal({
         channels,
         y_axis,
         pid,
+        ...extras,
       });
     }
     onClose();
@@ -185,24 +219,85 @@ export function PanelModal({
             </select>
           </div>
         )}
+        <div className="modal-row">
+          <span>Title</span>
+          <input
+            className="modal-input"
+            placeholder="(default: panel type)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </div>
         {type === "timeseries" && (
-          <div className="modal-row">
-            <span>y-axis</span>
-            <select
-              className="seq-select"
-              value={yMode}
-              onChange={(e) => setYMode(e.target.value as "auto" | "manual")}
-            >
-              <option value="auto">auto</option>
-              <option value="manual">manual</option>
-            </select>
-            {yMode === "manual" && (
-              <>
-                <input className="modal-input" style={{ width: 70 }} value={yMin} onChange={(e) => setYMin(e.target.value)} />
-                <input className="modal-input" style={{ width: 70 }} value={yMax} onChange={(e) => setYMax(e.target.value)} />
-              </>
-            )}
-          </div>
+          <>
+            <div className="modal-row">
+              <span>Y scale</span>
+              <select
+                className="seq-select"
+                style={{ flex: "none", width: 110 }}
+                value={yMode}
+                onChange={(e) => setYMode(e.target.value as "auto" | "manual")}
+              >
+                <option value="auto">autoscale</option>
+                <option value="manual">fixed</option>
+              </select>
+              {yMode === "manual" && (
+                <>
+                  <input
+                    className="modal-input"
+                    style={{ width: 70, flex: "none" }}
+                    placeholder="min"
+                    value={yMin}
+                    onChange={(e) => setYMin(e.target.value)}
+                  />
+                  <input
+                    className="modal-input"
+                    style={{ width: 70, flex: "none" }}
+                    placeholder="max"
+                    value={yMax}
+                    onChange={(e) => setYMax(e.target.value)}
+                  />
+                </>
+              )}
+              <label style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                <input type="checkbox" checked={yLog} onChange={(e) => setYLog(e.target.checked)} />
+                log
+              </label>
+            </div>
+            <div className="modal-row">
+              <span>Y label</span>
+              <input
+                className="modal-input"
+                placeholder='e.g. "pressure [bar]"'
+                value={yLabel}
+                onChange={(e) => setYLabel(e.target.value)}
+              />
+            </div>
+            <div className="modal-row">
+              <span>Time window</span>
+              <select
+                className="seq-select"
+                style={{ flex: "none", width: 110 }}
+                value={windowS}
+                onChange={(e) => setWindowS(e.target.value)}
+              >
+                <option value="">default (1m)</option>
+                <option value="10">10 s</option>
+                <option value="30">30 s</option>
+                <option value="60">1 min</option>
+                <option value="120">2 min</option>
+                <option value="300">5 min</option>
+              </select>
+              <label style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={showLegend}
+                  onChange={(e) => setShowLegend(e.target.checked)}
+                />
+                legend
+              </label>
+            </div>
+          </>
         )}
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>

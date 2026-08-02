@@ -25,6 +25,12 @@ const AXIS = {
 
 const SYNC_KEY = uPlot.sync("tbctl");
 const DEFAULT_WINDOW_S = 60;
+const WINDOW_CHOICES: [number, string][] = [
+  [10, "10s"],
+  [30, "30s"],
+  [60, "1m"],
+  [300, "5m"],
+];
 
 // run-review event markers (phase 15): what to draw and how
 interface Marker {
@@ -66,6 +72,10 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const tags = panel.channels;
   const isHistory = viewMode.mode === "run";
   const markersRef = useRef<Marker[]>([]);
+  const [windowS, setWindowS] = useState(panel.window_s ?? DEFAULT_WINDOW_S);
+  const windowRef = useRef(windowS);
+  windowRef.current = windowS;
+  useEffect(() => setWindowS(panel.window_s ?? DEFAULT_WINDOW_S), [panel.window_s]);
 
   // one-time backfill of the ring-buffer window (live mode)
   useEffect(() => {
@@ -93,12 +103,28 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       },
       scales: {
         x: { time: true },
-        y:
-          panel.y_axis.mode === "manual"
-            ? { auto: false, range: [panel.y_axis.min ?? 0, panel.y_axis.max ?? 1] }
-            : { auto: true },
+        y: {
+          ...(panel.y_axis.mode === "manual"
+            ? { auto: false, range: [panel.y_axis.min ?? 0, panel.y_axis.max ?? 1] as [number, number] }
+            : { auto: true }),
+          ...(panel.y_axis.log ? { distr: 3 as const, log: 10 as const } : {}),
+        },
       },
-      axes: [{ ...AXIS }, { ...AXIS, size: 52 }],
+      axes: [
+        { ...AXIS },
+        {
+          ...AXIS,
+          size: 52,
+          ...(panel.y_axis.label
+            ? {
+                label: panel.y_axis.label,
+                labelFont: "10px 'IBM Plex Mono', monospace",
+                labelGap: 4,
+                labelSize: 14,
+              }
+            : {}),
+        },
+      ],
       series: [
         {},
         ...tags.map((tag, i) => ({
@@ -192,7 +218,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         plot.setData(data, false);
         const latest = buffers.latestTime();
         if (followRef.current && latest !== null) {
-          plot.setScale("x", { min: latest - DEFAULT_WINDOW_S, max: latest });
+          plot.setScale("x", { min: latest - windowRef.current, max: latest });
         }
       });
     }
@@ -209,6 +235,8 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     panel.y_axis.mode,
     panel.y_axis.min,
     panel.y_axis.max,
+    panel.y_axis.log,
+    panel.y_axis.label,
     isHistory,
     viewMode.mode === "run" ? viewMode.run.run_id : "",
   ]);
@@ -225,7 +253,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="series-chips">
+      <div className="series-chips" style={panel.show_legend === false ? { display: "none" } : {}}>
         {tags.map((tag, i) => (
           <span
             key={tag}
@@ -245,16 +273,33 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             {viewMode.run.run_id}
           </span>
         )}
-        {!follow && !isHistory && (
-          <button
-            className="btn follow-btn"
-            onClick={() => {
-              followRef.current = true;
-              setFollow(true);
-            }}
-          >
-            ▶ LIVE
-          </button>
+        {!isHistory && (
+          <div className="chart-toolbar">
+            {WINDOW_CHOICES.map(([s, label]) => (
+              <button
+                key={s}
+                className={`win-btn ${windowS === s ? "active" : ""}`}
+                onClick={() => {
+                  setWindowS(s);
+                  followRef.current = true;
+                  setFollow(true);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+            {!follow && (
+              <button
+                className="win-btn live"
+                onClick={() => {
+                  followRef.current = true;
+                  setFollow(true);
+                }}
+              >
+                ▶ LIVE
+              </button>
+            )}
+          </div>
         )}
         <div ref={elRef} style={{ width: "100%", height: "100%" }} />
       </div>

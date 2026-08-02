@@ -116,7 +116,7 @@ export function DashboardGrid() {
         <div key={p.id}>
           <div className="panel">
             <div className="panel-header">
-              <span className="drag-handle">{PANEL_TITLES[p.type] ?? p.type}</span>
+              <span className="drag-handle">{p.title || PANEL_TITLES[p.type] || p.type}</span>
               <span>{p.id}</span>
               {editMode && (
                 <>

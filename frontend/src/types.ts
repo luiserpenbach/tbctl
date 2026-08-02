@@ -84,8 +84,17 @@ export interface PanelConfig {
   w: number;
   h: number;
   channels: string[];
-  y_axis: { mode: "auto" | "manual"; min: number | null; max: number | null };
+  y_axis: {
+    mode: "auto" | "manual";
+    min: number | null;
+    max: number | null;
+    log?: boolean;
+    label?: string | null;
+  };
   pid?: string | null;
+  title?: string | null;
+  window_s?: number | null;
+  show_legend?: boolean;
 }
 
 export interface RunMeta {

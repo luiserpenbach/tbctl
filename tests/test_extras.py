@@ -114,6 +114,50 @@ async def test_checklists(client):
     ).status_code == 409
 
 
+async def test_plot_panel_options_roundtrip(client):
+    dash = {
+        "name": "plotopts",
+        "grid": {"cols": 12, "row_height_px": 40},
+        "panels": [
+            {
+                "id": "p1",
+                "type": "timeseries",
+                "x": 0,
+                "y": 0,
+                "w": 8,
+                "h": 7,
+                "channels": ["pressure.chamber"],
+                "y_axis": {"mode": "manual", "min": 0.1, "max": 30, "log": True, "label": "bar"},
+                "title": "Chamber pressure",
+                "window_s": 30,
+                "show_legend": False,
+            }
+        ],
+    }
+    assert (await client.post("/api/dashboards/plotopts", json=dash)).status_code == 200
+    p = (await client.get("/api/dashboards/plotopts")).json()["panels"][0]
+    assert p["title"] == "Chamber pressure"
+    assert p["window_s"] == 30
+    assert p["show_legend"] is False
+    assert p["y_axis"] == {"mode": "manual", "min": 0.1, "max": 30, "log": True, "label": "bar"}
+
+    # log scale with non-positive fixed min is rejected
+    dash["panels"][0]["y_axis"]["min"] = 0
+    assert (await client.post("/api/dashboards/plotopts", json=dash)).status_code == 422
+    # old-style panels without the new fields still validate
+    dash["panels"][0] = {
+        "id": "p1",
+        "type": "timeseries",
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 7,
+        "channels": [],
+        "y_axis": {"mode": "auto", "min": None, "max": None},
+    }
+    assert (await client.post("/api/dashboards/plotopts", json=dash)).status_code == 200
+
+
 async def test_checklist_panel_type_accepted(client):
     dash = {
         "name": "chk",
