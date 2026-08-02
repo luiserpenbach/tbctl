@@ -410,4 +410,20 @@ check(getreg(C.ADDR_STATE) == C.ST_FAULT, "truncated upload -> FAULT")
 check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "truncated error code")
 cmd(C.CMD_RESET)
 
+-- full §5 capacity: 128 main + 128 abort steps must LOAD and run (the old
+-- byte-buffer parse OOMed the real T7 at 100 steps; streaming parse must not)
+local big_steps, big_abort = {}, {}
+for i = 1, 128 do big_steps[i] = { (i - 1) * 2, (i % 2 == 0) and SAFE or 0x0001 } end
+for i = 1, 128 do big_abort[i] = { (i - 1) * 2, SAFE } end
+big_steps[128] = { 127 * 2, SAFE } -- end safe
+load_table({ steps = big_steps, abort = big_abort, guard = 2000, mask = 0x0040 })
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "128+128 step table LOADs (streaming parse)")
+check(getreg(C.ADDR_STEP_COUNT) == 128 * 256 + 128, "full-capacity step count")
+do_arm(500)
+cmd(C.CMD_FIRE)
+for i = 1, 30 do step(10); beat() end
+check(getreg(C.ADDR_STATE) == C.ST_DONE, "full-capacity table runs to DONE")
+check(dio_writes[#dio_writes].value == SAFE, "full-capacity table ends safe")
+cmd(C.CMD_RESET)
+
 print(string.format("lua sequencer: %d/%d checks OK (real sequencer.lua executed)", checks, checks))

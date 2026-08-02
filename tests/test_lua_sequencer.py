@@ -21,7 +21,8 @@ def test_sequencer_artifact_exists_and_is_assembled():
     assert "ASSEMBLED ARTIFACT" in src
     assert "DO NOT EDIT LOGIC WITHOUT BUMPING INTERP_VERSION" in src
     assert "U.A = {" in src  # generated header inlined (single-upvalue table)
-    assert "function U.crc16" in src  # CRC inlined into U
+    assert "function U.cb" in src  # incremental per-byte CRC (streaming LOAD)
+    assert "U.b={}" not in src  # no byte buffer — it OOMed the T7 heap
     assert "return {" not in src  # module export stripped
 
 

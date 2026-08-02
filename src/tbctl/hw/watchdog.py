@@ -21,6 +21,12 @@ from tbctl.hw.ljm_iface import DeviceInterface
 
 log = logging.getLogger(__name__)
 
+# Grace period before the watchdog starts enforcing after (re)enable/boot.
+# Keep this SHORT: §10.3 test 4 showed the watchdog never fired within the
+# test window with a 10 s delay (the T7 was still in grace when comm resumed,
+# which resets the timer). 3 s is ample for the node to begin polling.
+STARTUP_DELAY_S = 3.0
+
 
 def configure_watchdog(iface: DeviceInterface, chmap: ChannelMap) -> dict:
     """Program the watchdog defaults; returns the applied settings."""
@@ -32,7 +38,7 @@ def configure_watchdog(iface: DeviceInterface, chmap: ChannelMap) -> dict:
     settings: list[tuple[str, float]] = [
         ("WATCHDOG_ENABLE_DEFAULT", 0),  # disable while (re)configuring
         ("WATCHDOG_TIMEOUT_S_DEFAULT", float(timeout_s)),
-        ("WATCHDOG_STARTUP_DELAY_S_DEFAULT", 10.0),  # grace period after boot
+        ("WATCHDOG_STARTUP_DELAY_S_DEFAULT", STARTUP_DELAY_S),
         ("WATCHDOG_DIO_ENABLE_DEFAULT", 1),
         ("WATCHDOG_DIO_STATE_DEFAULT", float(safe_word)),
         ("WATCHDOG_DIO_INHIBIT_DEFAULT", float(inhibit32)),

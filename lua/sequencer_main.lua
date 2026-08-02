@@ -8,46 +8,62 @@ U.S,U.E,U.N,U.M=0,0,0,0
 U.T,U.V,U.X,U.Y={},{},{},{}
 U.I,U.w,U.G,U.g,U.C=0xFFFF,0,0,0,0
 U.t,U.i,U.o,U.h,U.j,U.H,U.p=0,0,0,0,0,U.K.h,0
-U.B=U.K.e+2*U.K.s*U.K.b+U.K.r
-U.b={}
-function U.u(b,i) return b[i]+b[i+1]*256 end
-function U.U(b,i) return b[i]+b[i+1]*256+b[i+2]*65536+b[i+3]*16777216 end
+U.c_=0
 function U.P()
 U.W(U.A.s,U.z,U.S)U.W(U.A.e,U.z,U.E)U.W(U.A.n,U.z,U.N*256+U.M)
 U.W(U.A.c,U.z,U.C)U.W(U.A.u,U.z,U.i)U.W(U.A.m,U.Z,U.t)
 end
 function U.A_(v) U.p=v U.W(U.A.d,U.Z,v) end
-function U.L()
--- Host allocates FIFO before writing; free it after drain so stream fits in RAM.
-local n=U.R(U.A.b,U.Z)
-if n>U.B then for i=1,U.f(n/2) do U.R(U.A.f,U.z) end U.W(U.A.p,U.Z,0) U.S=7 U.E=3 U.A_(U.w)U.P() return end
-local k=0
-for i=1,U.f(n/2) do local v=U.R(U.A.f,U.z) U.b[k+1]=U.a(v,255)U.b[k+2]=U.s(v,8)k=k+2 end
-U.W(U.A.p,U.Z,0)
-local ok=k>=U.K.e+U.K.r
-local ns,na,ih,sf,gd,mk=0,0,0,0,0,0
-if ok then
-ns=U.u(U.b,1)na=U.u(U.b,3)ih=U.u(U.b,5)sf=U.u(U.b,7)gd=U.u(U.b,9)mk=U.u(U.b,11)
-if ns>U.K.s or na>U.K.s or(gd~=0 and mk==0)or k~=U.K.e+(ns+na)*U.K.b+U.K.r then ok=false end
+-- CRC-16/CCITT-FALSE, one byte into running U.c_ (table-free, load-time only)
+function U.cb(b)
+local c=bit.bxor(U.c_,b*256)
+for i=1,8 do if U.a(c,32768)~=0 then c=U.a(bit.bxor(c*2,4129),65535) else c=U.a(c*2,65535) end end
+U.c_=c
 end
-local off=U.K.e
+-- pop one FIFO word, feeding both bytes (LE order) into the running CRC
+function U.rw()
+local v=U.R(U.A.f,U.z)
+U.cb(U.a(v,255))U.cb(U.s(v,8))
+return v
+end
+function U.L()
+-- Streaming word-parse: the sec-5 wire format is u16-aligned throughout, so
+-- no byte buffer is needed. A 1548-entry Lua byte table OOMed the T7 heap
+-- with a 100-step table; this reads the FIFO word-by-word with an
+-- incremental CRC instead. Host allocates FIFO before upload; freed below.
+local nw=U.f(U.R(U.A.b,U.Z)/2)
+local ok=(nw>=7 and nw<=7+2*U.K.s*3)
+local ns,na,ih,sf,gd,mk=0,0,0,0,0,0
+U.c_=0xFFFF
+if ok then
+ns=U.rw()na=U.rw()ih=U.rw()sf=U.rw()gd=U.rw()mk=U.rw()
+if ns>U.K.s or na>U.K.s or(gd~=0 and mk==0)or nw~=7+(ns+na)*3 then ok=false end
+end
 if ok then
 local prev=-1
 for i=1,ns do
-local t=U.U(U.b,off+1)local v=U.u(U.b,off+5)
+local l=U.rw()local hh=U.rw()local v=U.rw()
+local t=l+hh*65536
 if t<prev or t>3600000 then ok=false break end
-prev=t U.T[i]=t U.V[i]=v off=off+U.K.b
+prev=t U.T[i]=t U.V[i]=v
 end
 end
 if ok then
 local prev=-1
 for i=1,na do
-local t=U.U(U.b,off+1)local v=U.u(U.b,off+5)
+local l=U.rw()local hh=U.rw()local v=U.rw()
+local t=l+hh*65536
 if t<prev or t>3600000 then ok=false break end
-prev=t U.X[i]=t U.Y[i]=v off=off+U.K.b
+prev=t U.X[i]=t U.Y[i]=v
 end
 end
-if ok then local c=U.crc16(U.b,off) if c~=U.u(U.b,off+1) then ok=false else U.C=c end end
+if ok then
+local cc=U.c_
+if cc~=U.R(U.A.f,U.z) then ok=false else U.C=cc end
+end
+-- drain residue (bad tables / early exit) and free the FIFO for the stream
+for i=1,U.f(U.R(U.A.b,U.Z)/2) do U.R(U.A.f,U.z) end
+U.W(U.A.p,U.Z,0)
 if ok then
 U.N,U.M,U.I,U.w,U.G,U.g=ns,na,ih,sf,gd,mk U.i,U.t=0,0
 -- DIO_INHIBIT must stay float32-exact: avoid 0xFFFF0000+U.I (rounds to 0xFFFFFFFF).

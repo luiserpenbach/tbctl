@@ -1,9 +1,17 @@
 # tbctl Hardware Acceptance — Timing Report (§10.3)
 
-> **Status: EXECUTED 2026-08-02 (USB software proxy).**
-> Blocker: full 100-step `timing_test` **OOMs** dense Lua mid-LOAD; ran
-> **8-step** prefix. Edge timing via USB `DIO_STATE`
-> poll — **not** a logic analyzer. Re-run with LA on FIO4/FIO5 for sign-off.
+> **Status: EXECUTED 2026-08-02 (USB software proxy) — re-run required.**
+> Edge timing via USB `DIO_STATE` poll — **not** a logic analyzer. Re-run
+> with LA on FIO4/FIO5 for sign-off. Two failures were traced and fixed
+> after this run; both need hardware confirmation:
+>
+> 1. **Test 1 (OOM)**: the byte-buffer LOAD parse OOMed the T7 heap at 100
+>    steps. Replaced with a streaming word-parse + incremental CRC (no byte
+>    buffer); the desktop harness now loads and runs full 128+128 tables.
+> 2. **Test 4 (watchdog)**: the watchdog's 10 s startup grace exceeded the
+>    6 s test window, so it never armed before the runner reconnected
+>    (which resets the comm timer) — `valve.purge` (bit 4) stayed energized.
+>    Startup delay is now 3 s and the runner waits grace + timeout + 2 s.
 
 ## Test setup
 

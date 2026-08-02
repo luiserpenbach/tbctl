@@ -27,8 +27,8 @@ from tbctl.hw.ljm_iface import LjmDevice
 from tbctl.hw.registers_gen import ARM_MAGIC, INTERP_VERSION, REG_NAME, Cmd, SeqError, SeqState
 from tbctl.hw.script_loader import deploy_script
 from tbctl.hw.watchdog import configure_watchdog
-from tbctl.services.compiler import compile_sequence
 from tbctl.seqtable import Step, StepTable
+from tbctl.services.compiler import compile_sequence
 
 REPO = Path(__file__).resolve().parents[1]
 OUT_JSON = REPO / "docs" / "timing-report-results.json"
@@ -71,9 +71,10 @@ def open_dev() -> LjmDevice:
 
 def ensure_lua(dev: LjmDevice) -> None:
     try:
-        if int(dev.read_name("LUA_RUN")) == 1 and int(
-            dev.read_name(REG_NAME["INTERP_VERSION"])
-        ) == INTERP_VERSION:
+        if (
+            int(dev.read_name("LUA_RUN")) == 1
+            and int(dev.read_name(REG_NAME["INTERP_VERSION"])) == INTERP_VERSION
+        ):
             print("lua ok")
             return
     except Exception as e:
@@ -107,15 +108,15 @@ def reset_idle(dev: LjmDevice) -> None:
         except TimeoutError:
             time.sleep(0.1)
     # last resort: redeploy clears interpreter state
-    print("reset_idle: redeploying after stuck", SeqState(int(dev.read_name(REG_NAME["STATE"]))).name)
+    print(
+        "reset_idle: redeploying after stuck", SeqState(int(dev.read_name(REG_NAME["STATE"]))).name
+    )
     deploy_script(dev, minify=True, save_to_flash=False)
     time.sleep(0.3)
 
 
 def timing_prefix(n: int) -> Sequence:
-    doc = yaml.safe_load(
-        (REPO / "configs/sequences/timing_test.yaml").read_text(encoding="utf-8")
-    )
+    doc = yaml.safe_load((REPO / "configs/sequences/timing_test.yaml").read_text(encoding="utf-8"))
     doc["name"] = f"timing_test_{n}"
     doc["steps"] = doc["steps"][:n]
     return Sequence.model_validate(doc)
@@ -133,7 +134,9 @@ def upload_compiled(dev: LjmDevice, compiled) -> None:
     dev.write_name(REG_NAME["CMD"], float(Cmd.LOAD))
     st = await_state(dev, SeqState.LOADED, SeqState.FAULT)
     if st == SeqState.FAULT:
-        raise RuntimeError(f"LOAD fault {SeqError(int(dev.read_name(REG_NAME['ERROR_CODE']))).name}")
+        raise RuntimeError(
+            f"LOAD fault {SeqError(int(dev.read_name(REG_NAME['ERROR_CODE']))).name}"
+        )
     # detect wedge: shouldn't happen if LOADED
     crc = int(dev.read_name(REG_NAME["CRC16"]))
     if crc != compiled.table.crc16:
@@ -217,7 +220,9 @@ def test1(dev: LjmDevice, chmap) -> dict:
         "valve.purge": edges_for_bit(samples, BIT["valve.purge"]),
         "valve.ox_pre": edges_for_bit(samples, BIT["valve.ox_pre"]),
     }
-    all_m = sorted(((t, tag, lvl) for tag, eds in measured.items() for t, lvl in eds), key=lambda x: x[0])
+    all_m = sorted(
+        ((t, tag, lvl) for tag, eds in measured.items() for t, lvl in eds), key=lambda x: x[0]
+    )
     reset_idle(dev)
     if not all_m:
         return {
@@ -356,7 +361,7 @@ def test3(dev: LjmDevice, bundle) -> dict:
                 lat = (time.perf_counter() - t0) * 1000.0
                 break
         trials.append(lat)
-        print(f"trial {i+1}: {lat} ms")
+        print(f"trial {i + 1}: {lat} ms")
         time.sleep(0.2)
         reset_idle(dev)
     ok = all(t is not None and t <= 502.0 for t in trials)
@@ -377,9 +382,15 @@ def test4(dev: LjmDevice, chmap) -> tuple[dict, LjmDevice]:
         configure_watchdog(dev, chmap)
     time.sleep(0.5)
     dev.write_name("LUA_RUN", 0.0)
-    print(f"waiting {timeout + 1:.0f}s…")
+    # Wait past the watchdog's startup grace AND its comm timeout: with the
+    # previous 10 s startup delay and a 6 s wait the watchdog never armed and
+    # the reconnect reset its timer — that produced the earlier false FAIL.
+    from tbctl.hw.watchdog import STARTUP_DELAY_S
+
+    wait_s = STARTUP_DELAY_S + timeout + 2.0
+    print(f"waiting {wait_s:.0f}s (startup grace {STARTUP_DELAY_S:.0f}s + timeout {timeout:.0f}s)…")
     dev.close()
-    time.sleep(timeout + 1.0)
+    time.sleep(wait_s)
     dev = open_dev()
     dio = int(dev.read_name("DIO_STATE"))
     controlled = 0
@@ -432,24 +443,24 @@ def fill_report(results: dict) -> None:
     REPORT.write_text(
         f"""# tbctl Hardware Acceptance — Timing Report (§10.3)
 
-> **Status: EXECUTED {s.get('date')} (USB software proxy).**
+> **Status: EXECUTED {s.get("date")} (USB software proxy).**
 > Blocker: full 100-step `timing_test` **OOMs** dense Lua mid-LOAD; ran
-> **{s.get('max_steps_loaded')}-step** prefix. Edge timing via USB `DIO_STATE`
+> **{s.get("max_steps_loaded")}-step** prefix. Edge timing via USB `DIO_STATE`
 > poll — **not** a logic analyzer. Re-run with LA on FIO4/FIO5 for sign-off.
 
 ## Test setup
 
 | Item | Value |
 |---|---|
-| Date | {s.get('date')} |
-| Operator(s) | {s.get('operator')} |
-| tbctl git hash | `{s.get('git_hash')}` |
-| `interp_version` | {s.get('interp_version')} |
-| `channels.yaml` SHA256 | `{s.get('channels_sha256')}` |
-| T7 firmware version | {s.get('t7_firmware')} (serial {s.get('t7_serial')}) |
-| LJM version | {s.get('ljm')} |
-| Logic analyzer | {s.get('logic_analyzer')} |
-| Node hardware | {s.get('node_hardware')} |
+| Date | {s.get("date")} |
+| Operator(s) | {s.get("operator")} |
+| tbctl git hash | `{s.get("git_hash")}` |
+| `interp_version` | {s.get("interp_version")} |
+| `channels.yaml` SHA256 | `{s.get("channels_sha256")}` |
+| T7 firmware version | {s.get("t7_firmware")} (serial {s.get("t7_serial")}) |
+| LJM version | {s.get("ljm")} |
+| Logic analyzer | {s.get("logic_analyzer")} |
+| Node hardware | {s.get("node_hardware")} |
 
 ## 1. Step-time accuracy and jitter (100-step pattern)
 
@@ -457,22 +468,22 @@ def fill_report(results: dict) -> None:
 
 | Metric | Value |
 |---|---|
-| Edges captured | {f(t1.get('edges_captured'), 0)} / {f(t1.get('edges_nominal'), 0)} (spec 100) |
-| Max absolute error | {f(t1.get('max_abs_error_ms'))} ms |
-| Mean error | {f(t1.get('mean_error_ms'))} ms |
-| Std dev (jitter) | {f(t1.get('stdev_ms'))} ms |
-| Result | **{t1.get('result', '_____')}** |
+| Edges captured | {f(t1.get("edges_captured"), 0)} / {f(t1.get("edges_nominal"), 0)} (spec 100) |
+| Max absolute error | {f(t1.get("max_abs_error_ms"))} ms |
+| Mean error | {f(t1.get("mean_error_ms"))} ms |
+| Std dev (jitter) | {f(t1.get("stdev_ms"))} ms |
+| Result | **{t1.get("result", "_____")}** |
 
-{t1.get('note', '')}
+{t1.get("note", "")}
 
 ## 2. ABORT-to-safe-state latency
 
 | Path | Latency | Pass? |
 |---|---|---|
-| CMD abort → ABORTING/ABORTED | {f(t2.get('rest_abort_ms'))} ms | {t2.get('rest_abort_pass')} |
-| Spark guard trip → spark low (past 5 ms guard) | {f(t2.get('spark_past_guard_ms'))} ms (on={f(t2.get('spark_on_ms'))}) | {t2.get('spark_guard_pass')} |
+| CMD abort → ABORTING/ABORTED | {f(t2.get("rest_abort_ms"))} ms | {t2.get("rest_abort_pass")} |
+| Spark guard trip → spark low (past 5 ms guard) | {f(t2.get("spark_past_guard_ms"))} ms (on={f(t2.get("spark_on_ms"))}) | {t2.get("spark_guard_pass")} |
 
-Spark end state: {t2.get('spark_state')} / {t2.get('spark_error')}
+Spark end state: {t2.get("spark_state")} / {t2.get("spark_error")}
 
 ## 3. Ethernet-pull-to-abort latency
 
@@ -486,15 +497,15 @@ Method: `HB_TIMEOUT_MS=500`, stop host heartbeat (USB proxy for cable pull).
 | 2 | {f(trials[1])} ms | {trials[1] is not None and trials[1] <= 502} |
 | 3 | {f(trials[2])} ms | {trials[2] is not None and trials[2] <= 502} |
 
-Overall: **{t3.get('result', '_____')}**
+Overall: **{t3.get("result", "_____")}**
 
 ## 4. Lua-kill → hardware watchdog
 
 | Check | Result |
 |---|---|
-| Outputs at safe_word after timeout | {'YES' if t4.get('outputs_at_safe_word') else 'NO'} |
-| Timeout observed | {f(t4.get('timeout_observed_s'), 2)} s |
-| Result | **{t4.get('result', '_____')}** |
+| Outputs at safe_word after timeout | {"YES" if t4.get("outputs_at_safe_word") else "NO"} |
+| Timeout observed | {f(t4.get("timeout_observed_s"), 2)} s |
+| Result | **{t4.get("result", "_____")}** |
 
 ## 5. Power-cycle-while-ARMED
 
@@ -504,19 +515,19 @@ Overall: **{t3.get('result', '_____')}**
 | `sequencer.lua` auto-starts (flash) and reports IDLE | NOT EXECUTED |
 | `INTERP_VERSION` correct after boot | NOT EXECUTED |
 
-Reason: {t5.get('reason', '')}
+Reason: {t5.get("reason", "")}
 
 ## 6. Soak (§10.4)
 
 | Metric | Value |
 |---|---|
-| Duration | {f(t6.get('duration_h'), 2)} h |
-| Expected samples | {f(t6.get('expected_samples'), 0)} |
-| `sample_counts` | {t6.get('sample_counts', '_____')} |
-| Loss | {t6.get('loss', '_____')} |
-| Result | **{t6.get('result', '_____')}** |
+| Duration | {f(t6.get("duration_h"), 2)} h |
+| Expected samples | {f(t6.get("expected_samples"), 0)} |
+| `sample_counts` | {t6.get("sample_counts", "_____")} |
+| Loss | {t6.get("loss", "_____")} |
+| Result | **{t6.get("result", "_____")}** |
 
-{t6.get('note', '')}
+{t6.get("note", "")}
 
 ## Sign-off
 

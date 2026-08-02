@@ -266,21 +266,14 @@ def gen_lua(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> str
 
 
 def gen_sequencer(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) -> str:
-    """Assemble the deployable lua/sequencer.lua from its three parts."""
+    """Assemble the deployable lua/sequencer.lua (header + logic).
+
+    The CRC is implemented inside sequencer_main.lua as U.cb (incremental,
+    per byte) so LOAD can stream the FIFO without a byte buffer — a
+    1548-entry Lua byte table OOMs the T7's shared heap. lua/crc16.lua
+    remains the host-side/desktop-harness reference implementation.
+    """
     header = gen_lua(spec, resolved, ljm)
-    # Compact CRC-16/CCITT-FALSE (same as lua/crc16.lua) — inlined for T7 size.
-    crc_lines = [
-        "function U.crc16(b,n,init)",
-        "local c=init or 65535",
-        "for i=1,n do",
-        "c=bit.bxor(c,b[i]*256)",
-        "for _=1,8 do",
-        "if bit.band(c,32768)~=0 then c=bit.band(bit.bxor(c*2,4129),65535) else c=bit.band(c*2,65535) end",
-        "end",
-        "end",
-        "return c",
-        "end",
-    ]
     main = (REPO_ROOT / "lua" / "sequencer_main.lua").read_text(encoding="utf-8")
     banner = (
         "-- ===========================================================================\n"
@@ -291,7 +284,7 @@ def gen_sequencer(spec: dict, resolved: dict[str, Register], ljm: LjmConstants) 
         "-- DO NOT EDIT LOGIC WITHOUT BUMPING INTERP_VERSION AND RERUNNING sec 10.3.\n"
         "-- ===========================================================================\n\n"
     )
-    return banner + header + "\n" + "\n".join(crc_lines) + "\n" + main
+    return banner + header + "\n" + main
 
 
 def generate(check: bool = False) -> int:

@@ -133,7 +133,8 @@ class SequencerService:
         # RESET (if sent) is consumed on the next tick; wait for IDLE then LOAD
         await self._await_state(SeqState.IDLE)
         await asyncio.to_thread(self._write, "CMD", Cmd.LOAD)
-        st = await self._await_state(SeqState.LOADED, SeqState.FAULT)
+        # full 128+128 tables take the T7 ~a second to stream-parse + CRC
+        st = await self._await_state(SeqState.LOADED, SeqState.FAULT, timeout_s=10.0)
         if st == SeqState.FAULT:
             self._events.log("seq_load_failed", sequence=name, error=self.error().name)
             raise SequencerError(f"device rejected table: {self.error().name}")
