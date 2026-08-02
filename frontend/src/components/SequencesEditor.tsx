@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { BoundCfg, SequenceConfig, SequenceInfo, TimelineData, ValidateOk } from "../api";
 import { fetchSequenceConfig, fetchSequences, saveSequence, validateSequence } from "../api";
 import { useStore } from "../store";
-import type { ChannelInfo } from "../types";
+import { isReadable, type ChannelInfo } from "../types";
 
 // Sequence editor (roadmap phase 12). YAML stays the source of truth: this
 // edits a local copy of a sequence and POSTs the whole document back; the
@@ -340,7 +340,7 @@ export function SequencesEditor() {
     [channels],
   );
   const inputs = useMemo(
-    () => channels.filter((c) => c.kind === "analog_in" || c.kind === "thermocouple_k"),
+    () => channels.filter(isReadable),
     [channels],
   );
 

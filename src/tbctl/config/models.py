@@ -171,8 +171,32 @@ class SparkChannel(StrictModel):
         return v
 
 
+class DerivedChannel(StrictModel):
+    """Calculated channel: an expression over physical input channels,
+    computed in the acquisition path so it flows through live charts, the
+    recorder, redlines and CSV export like any measured channel. Runs in
+    the rate group of its fastest referenced channel (slower references
+    are sample-and-hold)."""
+
+    tag: str
+    kind: Literal["derived"]
+    unit: str = ""
+    expr: str
+
+    @field_validator("expr")
+    @classmethod
+    def _expr(cls, v: str) -> str:
+        from tbctl.config.expr import ExprError, expr_refs
+
+        try:
+            expr_refs(v)
+        except ExprError as e:
+            raise ValueError(f"bad expression: {e}") from e
+        return v
+
+
 Channel = Annotated[
-    AnalogInChannel | ThermocoupleChannel | ValveChannel | SparkChannel,
+    AnalogInChannel | ThermocoupleChannel | ValveChannel | SparkChannel | DerivedChannel,
     Field(discriminator="kind"),
 ]
 
@@ -195,7 +219,7 @@ class ChannelMap(StrictModel):
         for t in tags:
             if not _TAG_RE.match(t):
                 raise ValueError(f"tag {t!r} must be dotted lowercase (e.g. pressure.chamber)")
-        hws = [c.hw for c in self.channels]
+        hws = [c.hw for c in self.channels if not isinstance(c, DerivedChannel)]
         if dupes := {h for h in hws if hws.count(h) > 1}:
             raise ValueError(f"duplicate hw assignments: {sorted(dupes)}")
         if "default" not in self.rate_groups:
@@ -203,6 +227,18 @@ class ChannelMap(StrictModel):
         for c in self.channels:
             if isinstance(c, InputChannel) and c.rate_group not in self.rate_groups:
                 raise ValueError(f"{c.tag}: unknown rate_group {c.rate_group!r}")
+        # derived channels: refs must be existing physical inputs (no chaining)
+        physical = {c.tag for c in self.channels if isinstance(c, InputChannel)}
+        from tbctl.config.expr import expr_refs
+
+        for c in self.channels:
+            if isinstance(c, DerivedChannel):
+                for ref in expr_refs(c.expr):
+                    if ref not in physical:
+                        raise ValueError(
+                            f"{c.tag}: expression references {ref!r}, which is not a "
+                            "physical input channel (derived channels cannot chain)"
+                        )
         outputs = self.outputs()
         if len(outputs) > MAX_OUTPUT_BITS:
             raise ValueError(f"more than {MAX_OUTPUT_BITS} output channels")
@@ -222,7 +258,23 @@ class ChannelMap(StrictModel):
         return sorted(outs, key=lambda c: dio_number(c.hw))
 
     def inputs(self) -> list[InputChannel]:
+        """Physical (hardware-scanned) input channels."""
         return [c for c in self.channels if isinstance(c, InputChannel)]
+
+    def derived(self) -> list[DerivedChannel]:
+        return [c for c in self.channels if isinstance(c, DerivedChannel)]
+
+    def derived_group(self, dc: DerivedChannel) -> str:
+        """Rate group a derived channel is computed on: the fastest group
+        among its referenced channels (ties: first reference wins)."""
+        from tbctl.config.expr import expr_refs
+
+        groups = [self.by_tag(ref).rate_group for ref in expr_refs(dc.expr)]
+        return max(groups, key=lambda g: self.rate_groups[g].rate_hz)
+
+    def readable_tags(self) -> set[str]:
+        """Tags that produce values: physical inputs + derived."""
+        return {c.tag for c in self.inputs()} | {c.tag for c in self.derived()}
 
     def bit_index(self, tag: str) -> int:
         """Bit position of an output tag in the 16-bit state word."""
@@ -368,7 +420,7 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
     """
     errors: list[str] = []
     output_tags = {c.tag for c in chmap.outputs()}
-    input_tags = {c.tag for c in chmap.inputs()}
+    input_tags = chmap.readable_tags()  # physical + derived
     for what, steps in (("steps", seq.steps), ("abort", seq.abort)):
         for i, step in enumerate(steps):
             for tag, value in step.set.items():
@@ -466,7 +518,7 @@ def cross_validate_pid(pid: PidConfig, chmap: ChannelMap) -> list[str]:
     """Channel-map-dependent checks. Returns a list of error strings."""
     errors: list[str] = []
     output_tags = {c.tag for c in chmap.outputs()}
-    input_tags = {c.tag for c in chmap.inputs()}
+    input_tags = chmap.readable_tags()  # physical + derived
     for e in pid.elements:
         if isinstance(e, PidValveElement) and e.channel not in output_tags:
             errors.append(f"element {e.id}: {e.channel!r} is not an output channel")

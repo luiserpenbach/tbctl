@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 import numpy as np
 
+from tbctl.config.expr import compile_expr
 from tbctl.config.models import (
     AnalogInChannel,
     ChannelMap,
@@ -157,14 +158,31 @@ class AcquisitionService:
         self.scan_rate_hz = max(
             (chmap.rate_groups[c.rate_group].rate_hz for c in inputs), default=50.0
         )
+        # derived channels: compiled expression + which group they compute on.
+        # A derived channel lives in the ring of its fastest referenced
+        # channel; references to slower groups are sample-and-hold.
+        self._derived_by_group: dict[str, list[tuple[str, object, list[str]]]] = {}
+        derived_group_of: dict[str, str] = {}
+        for dc in chmap.derived():
+            fn, refs = compile_expr(dc.expr)
+            g = chmap.derived_group(dc)
+            self._derived_by_group.setdefault(g, []).append((dc.tag, fn, refs))
+            derived_group_of[dc.tag] = g
         # per rate group: decimation factor + ring buffer
         self.rings: dict[str, RingBuffer] = {}
         self._group_cols: dict[str, list[int]] = {}
         self._group_decim: dict[str, int] = {}
+        self._group_phys: dict[str, dict[str, int]] = {}  # tag -> col within group block
         for group, rg in chmap.rate_groups.items():
             tags = [c.tag for c in inputs if c.rate_group == group]
-            if not tags:
+            dtags = [t for t, _, _ in self._derived_by_group.get(group, [])]
+            if not tags and not dtags:
                 continue
+            if not tags:
+                raise ValueError(
+                    f"rate group {group}: derived channels need at least one "
+                    "physical channel in their group"
+                )
             factor = self.scan_rate_hz / rg.rate_hz
             if abs(factor - round(factor)) > 1e-9:
                 raise ValueError(
@@ -173,8 +191,11 @@ class AcquisitionService:
                 )
             self._group_decim[group] = round(factor)
             self._group_cols[group] = [self._scan_names.index(chmap.by_tag(t).hw) for t in tags]
-            self.rings[group] = RingBuffer(tags, rg.rate_hz, capacity_s)
-        self._tag_group = {c.tag: c.rate_group for c in inputs}
+            self._group_phys[group] = {t: k for k, t in enumerate(tags)}
+            self.rings[group] = RingBuffer(tags + dtags, rg.rate_hz, capacity_s)
+        self._tag_group = {c.tag: c.rate_group for c in inputs} | derived_group_of
+        # latest EU value per physical tag, for cross-group sample-and-hold
+        self._latest_eu: dict[str, float] = {}
         self._cj_degc = 25.0
         self._cj_read_at = 0.0
         # latest raw volts per tag (for the raw channel viewer)
@@ -249,18 +270,45 @@ class AcquisitionService:
         for j, conv in enumerate(self._converters):
             eu[:, j] = conv(volts[:, j], self._cj_degc)
             self._latest_raw[self._scan_channels[j].tag] = float(volts[-1, j])
-        for group, ring in self.rings.items():
+        # pass 1: slice per-group blocks and refresh latest EU values, so
+        # derived channels see the freshest cross-group samples in pass 2
+        blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for group in self.rings:
             decim = self._group_decim[group]
             mask = idx % decim == 0
-            if mask.any():
-                gt = t[mask]
-                gv = eu[np.ix_(mask, self._group_cols[group])]
-                ring.append(gt, gv)
-                for fn in self._listeners:
+            if not mask.any():
+                continue
+            gt = t[mask]
+            gv = eu[np.ix_(mask, self._group_cols[group])]
+            blocks[group] = (gt, gv)
+            for tag, k in self._group_phys[group].items():
+                self._latest_eu[tag] = float(gv[-1, k])
+        # pass 2: append derived columns, store, notify listeners
+        for group, (gt, gv) in blocks.items():
+            derived = self._derived_by_group.get(group, [])
+            if derived:
+                phys = self._group_phys[group]
+                cols = []
+                for dtag, fn, refs in derived:
                     try:
-                        fn(group, gt, gv)
+                        env = {
+                            r: (gv[:, phys[r]] if r in phys else self._latest_eu.get(r, np.nan))
+                            for r in refs
+                        }
+                        arr = np.asarray(fn(env), dtype=np.float64)
+                        if arr.ndim == 0:
+                            arr = np.full(len(gt), float(arr))
                     except Exception:
-                        log.exception("acquisition listener failed")
+                        log.exception("derived channel %s failed", dtag)
+                        arr = np.full(len(gt), np.nan)
+                    cols.append(arr)
+                gv = np.column_stack([gv, *cols])
+            self.rings[group].append(gt, gv)
+            for listener in self._listeners:
+                try:
+                    listener(group, gt, gv)
+                except Exception:
+                    log.exception("acquisition listener failed")
         self._samples_in += n
 
     # -- queries -----------------------------------------------------------

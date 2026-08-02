@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchRuns, runCsvUrl } from "../api";
 import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
+import { isReadable } from "../types";
 import { EventFeed } from "./EventFeed";
 
 export function Sidebar() {
@@ -78,7 +79,7 @@ export function Sidebar() {
                 href={runCsvUrl(
                   r.run_id,
                   channels
-                    .filter((c) => c.kind === "analog_in" || c.kind === "thermocouple_k")
+                    .filter(isReadable)
                     .map((c) => c.tag),
                 )}
                 download

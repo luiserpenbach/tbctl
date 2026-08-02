@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchPids } from "../api";
 import { useStore } from "../store";
-import type { PanelConfig } from "../types";
+import { isReadable, type PanelConfig } from "../types";
 import { PANEL_TITLES } from "./DashboardGrid";
 
 const PANEL_TYPES: PanelConfig["type"][] = [
@@ -28,7 +28,7 @@ function ChannelPicker({
   allowGlobs: boolean;
 }) {
   const channels = useStore((s) => s.channels);
-  const inputs = channels.filter((c) => c.kind === "analog_in" || c.kind === "thermocouple_k");
+  const inputs = channels.filter(isReadable);
   const [glob, setGlob] = useState("");
   const toggle = (tag: string) =>
     onChange(selected.includes(tag) ? selected.filter((t) => t !== tag) : [...selected, tag]);

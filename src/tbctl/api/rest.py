@@ -140,6 +140,20 @@ def build_router(ctx: NodeContext) -> APIRouter:
         chmap = ctx.bundle.channels.model
         out = []
         for c in chmap.channels:
+            if c.kind == "derived":
+                group = chmap.derived_group(c)
+                out.append(
+                    {
+                        "tag": c.tag,
+                        "hw": "calc",
+                        "kind": c.kind,
+                        "unit": c.unit,
+                        "expr": c.expr,
+                        "rate_group": group,
+                        "rate_hz": chmap.rate_groups[group].rate_hz,
+                    }
+                )
+                continue
             entry: dict = {"tag": c.tag, "hw": c.hw, "kind": c.kind}
             if c.kind in ("analog_in", "thermocouple_k"):
                 entry["unit"] = c.unit

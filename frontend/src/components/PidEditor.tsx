@@ -11,6 +11,7 @@ import {
   type PidInfo,
 } from "../api";
 import { useStore } from "../store";
+import { isReadable } from "../types";
 import { PidStage } from "./pid/PidStage";
 
 // Visual P&ID editor (roadmap phase 13b): choose/upload a background SVG,
@@ -24,7 +25,7 @@ export function PidEditor() {
     [channels],
   );
   const inputs = useMemo(
-    () => channels.filter((c) => c.kind === "analog_in" || c.kind === "thermocouple_k"),
+    () => channels.filter(isReadable),
     [channels],
   );
 

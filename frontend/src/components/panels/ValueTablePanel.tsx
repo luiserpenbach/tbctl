@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
-import type { PanelConfig } from "../../types";
+import { isReadable, type PanelConfig } from "../../types";
 
 function globToRegex(glob: string): RegExp {
   const esc = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
@@ -14,7 +14,7 @@ export function ValueTablePanel({ panel }: { panel: PanelConfig }) {
   useEffect(() => onTick(() => setTick((t) => t + 1)), []);
 
   const tags = useMemo(() => {
-    const inputs = channels.filter((c) => c.kind === "analog_in" || c.kind === "thermocouple_k");
+    const inputs = channels.filter(isReadable);
     const patterns = panel.channels.map(globToRegex);
     return inputs.filter((c) => patterns.some((p) => p.test(c.tag)));
   }, [channels, panel.channels]);

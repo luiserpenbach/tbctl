@@ -3,14 +3,19 @@
 export interface ChannelInfo {
   tag: string;
   hw: string;
-  kind: "analog_in" | "thermocouple_k" | "valve" | "spark";
+  kind: "analog_in" | "thermocouple_k" | "valve" | "spark" | "derived";
   unit?: string;
   rate_group?: string;
   rate_hz?: number;
   fail_safe?: string;
   bit?: number;
   active_level?: number;
+  expr?: string;
 }
+
+/** Channels that produce values: physical inputs + calculated channels. */
+export const isReadable = (c: ChannelInfo) =>
+  c.kind === "analog_in" || c.kind === "thermocouple_k" || c.kind === "derived";
 
 export interface NodeStatus {
   time: number;

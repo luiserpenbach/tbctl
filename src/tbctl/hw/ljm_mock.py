@@ -302,7 +302,7 @@ class MockDevice:
         self._fifo = bytearray()
         self._setpoints_eu: dict[str, float] = {}
         self._noise_sigma_eu: dict[str, float] = {}
-        self._by_hw = {c.hw: c for c in chmap.channels}
+        self._by_hw = {c.hw: c for c in chmap.channels if c.kind != "derived"}
         # stream state
         self._scan_names: list[str] = []
         self._scan_rate = 0.0

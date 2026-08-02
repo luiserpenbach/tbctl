@@ -112,3 +112,13 @@ channels:
     kind: spark
     fail_safe: off
     max_on_ms: 2000      # D9 guard, compiled into upload header
+
+  # ---- calculated channels (derived signals, computed on the host) ----
+  - tag: calc.dp_ox_inj
+    kind: derived
+    unit: bar
+    expr: pressure.ox_manifold - pressure.chamber
+  - tag: calc.dp_fuel_inj
+    kind: derived
+    unit: bar
+    expr: pressure.fuel_manifold - pressure.chamber

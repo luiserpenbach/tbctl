@@ -12,8 +12,8 @@ type Cal =
 
 interface Chan {
   tag: string;
-  hw: string;
-  kind: "analog_in" | "thermocouple_k" | "valve" | "spark";
+  hw?: string;
+  kind: "analog_in" | "thermocouple_k" | "valve" | "spark" | "derived";
   unit?: string;
   range?: number;
   cal?: Cal;
@@ -22,6 +22,7 @@ interface Chan {
   open_state?: string;
   on_state?: string;
   max_on_ms?: number;
+  expr?: string;
 }
 
 interface Config {
@@ -138,17 +139,42 @@ function ChannelForm({
               if (kind === "thermocouple_k") Object.assign(base, { unit: "degC", rate_group: "default" });
               if (kind === "valve") Object.assign(base, { fail_safe: "closed", open_state: "high" });
               if (kind === "spark") Object.assign(base, { fail_safe: "off", on_state: "high", max_on_ms: 2000 });
+              if (kind === "derived") {
+                delete base.hw;
+                Object.assign(base, { unit: "", expr: "" });
+              }
               setC(base);
             }}
           >
-            {["analog_in", "thermocouple_k", "valve", "spark"].map((k) => (
+            {["analog_in", "thermocouple_k", "valve", "spark", "derived"].map((k) => (
               <option key={k}>{k}</option>
             ))}
           </select>
-          <span style={{ width: 30 }}>pin</span>
-          {inp(c.hw, (s) => upd({ hw: s.toUpperCase() }), 80)}
+          {c.kind !== "derived" && (
+            <>
+              <span style={{ width: 30 }}>pin</span>
+              {inp(c.hw, (s) => upd({ hw: s.toUpperCase() }), 80)}
+            </>
+          )}
         </div>
-        {!isOutput && (
+        {c.kind === "derived" && (
+          <>
+            <div className="modal-row">
+              <span style={{ width: 70 }}>unit</span>
+              {inp(c.unit, (s) => upd({ unit: s }), 70)}
+            </div>
+            <div className="modal-row">
+              <span style={{ width: 70 }}>expr</span>
+              {inp(c.expr, (s) => upd({ expr: s }), 300)}
+            </div>
+            <div style={{ fontSize: 10, color: "var(--text-faint)" }}>
+              arithmetic over physical channel tags, e.g.{" "}
+              <code>pressure.ox_manifold - pressure.chamber</code> · functions: abs sqrt log
+              log10 exp min max
+            </div>
+          </>
+        )}
+        {!isOutput && c.kind !== "derived" && (
           <div className="modal-row">
             <span style={{ width: 70 }}>unit</span>
             {inp(c.unit, (s) => upd({ unit: s }), 70)}
@@ -331,11 +357,17 @@ export function ChannelsEditor() {
           {cfg.channels.map((c) => (
             <tr key={c.tag + c.hw}>
               <td>{c.tag}</td>
-              <td style={{ color: "var(--text-dim)" }}>{c.hw}</td>
+              <td style={{ color: "var(--text-dim)" }}>{c.hw ?? "calc"}</td>
               <td>{c.kind}</td>
               <td className="unit">{c.unit ?? c.fail_safe}</td>
               <td style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                {c.cal ? (c.cal.kind === "linear" ? `×${c.cal.gain}+${c.cal.offset}` : c.cal.kind) : "—"}
+                {c.kind === "derived"
+                  ? c.expr
+                  : c.cal
+                    ? c.cal.kind === "linear"
+                      ? `×${c.cal.gain}+${c.cal.offset}`
+                      : c.cal.kind
+                    : "—"}
               </td>
               <td className="val">
                 {raws[c.tag] !== undefined ? `${evalCal(c.cal, raws[c.tag]).toFixed(2)}` : "—"}
