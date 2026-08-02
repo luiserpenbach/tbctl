@@ -24,6 +24,7 @@ interface TbctlStore {
   sidebarOpen: boolean;
   runs: RunMeta[];
   viewMode: ViewMode;
+  overlayRuns: RunMeta[]; // runs overlaid on charts in run view (FIRE-aligned)
   events: EventRecord[];
   view: "dashboard" | "channels" | "sequences" | "pid";
 
@@ -32,6 +33,7 @@ interface TbctlStore {
   setEvents: (e: EventRecord[]) => void;
   setRuns: (r: RunMeta[]) => void;
   setViewMode: (v: ViewMode) => void;
+  toggleOverlayRun: (r: RunMeta) => void;
   setStatus: (s: NodeStatus) => void;
   setChannels: (c: ChannelInfo[]) => void;
   setSeqStatus: (s: SeqStatusMsg) => void;
@@ -59,6 +61,7 @@ export const useStore = create<TbctlStore>((set) => ({
   sidebarOpen: true,
   runs: [],
   viewMode: { mode: "live" },
+  overlayRuns: [],
   events: [],
   view: "dashboard",
 
@@ -66,7 +69,21 @@ export const useStore = create<TbctlStore>((set) => ({
   pushEvent: (e) => set((s) => ({ events: [e, ...s.events].slice(0, 200) })),
   setEvents: (events) => set({ events: events.slice(0, 200) }),
   setRuns: (runs) => set({ runs }),
-  setViewMode: (viewMode) => set({ viewMode }),
+  setViewMode: (viewMode) =>
+    set((s) => ({
+      viewMode,
+      // leaving run view drops overlays; the primary run can't overlay itself
+      overlayRuns:
+        viewMode.mode === "live"
+          ? []
+          : s.overlayRuns.filter((r) => r.run_id !== viewMode.run.run_id),
+    })),
+  toggleOverlayRun: (r) =>
+    set((s) => ({
+      overlayRuns: s.overlayRuns.some((o) => o.run_id === r.run_id)
+        ? s.overlayRuns.filter((o) => o.run_id !== r.run_id)
+        : [...s.overlayRuns, r].slice(0, 3),
+    })),
   setStatus: (status) => set({ status }),
   setChannels: (channels) => set({ channels }),
   setSeqStatus: (seqStatus) => {

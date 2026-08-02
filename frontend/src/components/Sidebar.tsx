@@ -12,6 +12,8 @@ export function Sidebar() {
   const setRuns = useStore((s) => s.setRuns);
   const viewMode = useStore((s) => s.viewMode);
   const setViewMode = useStore((s) => s.setViewMode);
+  const overlayRuns = useStore((s) => s.overlayRuns);
+  const toggleOverlayRun = useStore((s) => s.toggleOverlayRun);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
@@ -64,6 +66,7 @@ export function Sidebar() {
         </div>
         {runs.slice(0, 20).map((r) => {
           const active = viewMode.mode === "run" && viewMode.run.run_id === r.run_id;
+          const overlaid = overlayRuns.some((o) => o.run_id === r.run_id);
           return (
             <div
               key={r.run_id}
@@ -72,7 +75,22 @@ export function Sidebar() {
               title={`${r.operator} — ${r.notes}`}
               onClick={() => setViewMode({ mode: "run", run: r })}
             >
-              <span style={{ color: active ? "var(--accent)" : undefined }}>{r.run_id}</span>
+              <span style={{ color: active ? "var(--accent)" : overlaid ? "var(--amber)" : undefined }}>
+                {r.run_id}
+              </span>
+              {viewMode.mode === "run" && !active && (
+                <a
+                  className="csv-link"
+                  title={overlaid ? "remove overlay" : "overlay on charts (FIRE-aligned)"}
+                  style={overlaid ? { color: "var(--amber)" } : {}}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleOverlayRun(r);
+                  }}
+                >
+                  {overlaid ? "⊖" : "⊕"}
+                </a>
+              )}
               <a
                 className="csv-link"
                 title="download CSV (all input channels)"

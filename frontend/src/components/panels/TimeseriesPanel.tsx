@@ -25,6 +25,8 @@ const AXIS = {
 
 const SYNC_KEY = uPlot.sync("tbctl");
 const DEFAULT_WINDOW_S = 60;
+const runShort = (runId: string) => runId.replace(/^\d{8}-/, "");
+
 const WINDOW_CHOICES: [number, string][] = [
   [10, "10s"],
   [30, "30s"],
@@ -69,6 +71,8 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   hiddenRef.current = hidden;
   const channels = useStore((s) => s.channels);
   const viewMode = useStore((s) => s.viewMode);
+  const overlayRuns = useStore((s) => s.overlayRuns);
+  const toggleOverlayRun = useStore((s) => s.toggleOverlayRun);
   const tags = panel.channels;
   const isHistory = viewMode.mode === "run";
   const markersRef = useRef<Marker[]>([]);
@@ -94,6 +98,33 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     const el = elRef.current;
     if (!el || !tags.length) return;
 
+    // run view: primary run + FIRE-aligned overlays (t=0 at seq_fired)
+    const runsToPlot =
+      isHistory && viewMode.mode === "run"
+        ? [viewMode.run, ...overlayRuns.filter((o) => o.run_id !== viewMode.run.run_id)]
+        : [];
+    const relative = runsToPlot.length > 1;
+
+    const seriesDefs =
+      runsToPlot.length > 0
+        ? runsToPlot.flatMap((run, ri) =>
+            tags.map((tag, i) => ({
+              label: ri === 0 ? tag : `${tag} · ${runShort(run.run_id)}`,
+              stroke: PALETTE[i % PALETTE.length],
+              width: ri === 0 ? 1.6 : 1.1,
+              dash: ri === 0 ? undefined : ([6, 4] as number[]),
+              alpha: ri === 0 ? 1 : 0.75,
+              points: { show: false },
+            })),
+          )
+        : tags.map((tag, i) => ({
+            label: tag,
+            stroke: PALETTE[i % PALETTE.length],
+            width: 1.4,
+            points: { show: false },
+          }));
+    const nSeries = seriesDefs.length;
+
     const opts: uPlot.Options = {
       width: el.clientWidth,
       height: el.clientHeight,
@@ -102,7 +133,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         drag: { x: true, y: false },
       },
       scales: {
-        x: { time: true },
+        x: { time: !relative },
         y: {
           ...(panel.y_axis.mode === "manual"
             ? { auto: false, range: [panel.y_axis.min ?? 0, panel.y_axis.max ?? 1] as [number, number] }
@@ -125,15 +156,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             : {}),
         },
       ],
-      series: [
-        {},
-        ...tags.map((tag, i) => ({
-          label: tag,
-          stroke: PALETTE[i % PALETTE.length],
-          width: 1.4,
-          points: { show: false },
-        })),
-      ],
+      series: [{}, ...seriesDefs],
       hooks: {
         setSelect: [
           (u) => {
@@ -174,7 +197,11 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       },
     };
 
-    const plot = new uPlot(opts, [[], ...tags.map(() => [])] as unknown as uPlot.AlignedData, el);
+    const plot = new uPlot(
+      opts,
+      [[], ...Array.from({ length: nSeries }, () => [])] as unknown as uPlot.AlignedData,
+      el,
+    );
     plotRef.current = plot;
 
     const ro = new ResizeObserver(() => {
@@ -185,28 +212,50 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     let off = () => {};
     if (isHistory && viewMode.mode === "run") {
       markersRef.current = [];
-      fetchRunEvents(viewMode.run.run_id)
-        .then((r) => {
-          markersRef.current = r.events
-            .map(toMarker)
-            .filter((m): m is Marker => m !== null);
-          plot.redraw();
-        })
-        .catch(() => {});
-      // historical: fetch the run's data once and frame the whole run
-      fetchRunData(viewMode.run.run_id, tags, 4000)
-        .then((r) => {
-          const present = tags.filter((tag) => r.series[tag]?.t.length);
-          if (!present.length) return;
-          const joined = uPlot.join(
-            present.map((tag) => [r.series[tag].t, r.series[tag].mean] as uPlot.AlignedData),
-          );
-          const data: (number | null | undefined)[][] = [joined[0] as number[]];
-          let j = 1;
-          for (const tag of tags) {
-            data.push(present.includes(tag) ? (joined[j++] as number[]) : []);
+      // fetch every run's data + events; t0 per run = last seq_fired
+      // (fallback: run start) so overlays align on FIRE
+      Promise.all(
+        runsToPlot.map(async (run) => {
+          const [ev, dat] = await Promise.all([
+            fetchRunEvents(run.run_id).catch(() => ({ events: [] as { event: string; time: number }[] })),
+            fetchRunData(run.run_id, tags, 4000).catch(
+              () => ({ run_id: run.run_id, series: {} }) as Awaited<ReturnType<typeof fetchRunData>>,
+            ),
+          ]);
+          let t0 = run.t_start;
+          for (const e of ev.events) if (e.event === "seq_fired") t0 = e.time;
+          return { run, t0, series: dat.series, events: ev.events };
+        }),
+      )
+        .then((items) => {
+          const tables: uPlot.AlignedData[] = [];
+          const present: boolean[] = [];
+          for (const it of items) {
+            for (const tag of tags) {
+              const s = it.series[tag];
+              if (s?.t.length) {
+                const ts = relative ? s.t.map((x) => x - it.t0) : s.t;
+                tables.push([ts, s.mean] as uPlot.AlignedData);
+                present.push(true);
+              } else {
+                present.push(false);
+              }
+            }
           }
-          plot.setData(data as uPlot.AlignedData);
+          if (tables.length) {
+            const joined = uPlot.join(tables);
+            const data: (number | null | undefined)[][] = [joined[0] as number[]];
+            let j = 1;
+            for (const p of present) data.push(p ? (joined[j++] as number[]) : []);
+            plot.setData(data as uPlot.AlignedData);
+          }
+          // event markers come from the primary run only
+          const prim = items[0];
+          markersRef.current = prim.events
+            .map(toMarker)
+            .filter((m): m is Marker => m !== null)
+            .map((m) => (relative ? { ...m, t: m.t - prim.t0 } : m));
+          plot.redraw();
         })
         .catch(() => {});
     } else {
@@ -239,6 +288,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     panel.y_axis.label,
     isHistory,
     viewMode.mode === "run" ? viewMode.run.run_id : "",
+    overlayRuns.map((o) => o.run_id).join("|"),
   ]);
 
   const toggleTag = (tag: string) =>
@@ -253,6 +303,24 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {isHistory && viewMode.mode === "run" && overlayRuns.length > 0 && (
+        <div className="series-chips">
+          <span className="series-chip" title="primary run — solid lines, t=0 at FIRE">
+            — {runShort(viewMode.run.run_id)}
+          </span>
+          {overlayRuns.map((o) => (
+            <span
+              key={o.run_id}
+              className="series-chip"
+              style={{ color: "var(--amber)", cursor: "pointer" }}
+              title="overlay (dashed, FIRE-aligned) — click to remove"
+              onClick={() => toggleOverlayRun(o)}
+            >
+              ┄ {runShort(o.run_id)} ×
+            </span>
+          ))}
+        </div>
+      )}
       <div className="series-chips" style={panel.show_legend === false ? { display: "none" } : {}}>
         {tags.map((tag, i) => (
           <span
