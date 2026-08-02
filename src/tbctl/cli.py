@@ -188,10 +188,8 @@ def cmd_deploy_lua(args: argparse.Namespace) -> int:
         time.sleep(1.0)
         try:
             applied = configure_watchdog(dev, chmap)
-            print(
-                f"hardware watchdog armed: timeout {applied['WATCHDOG_TIMEOUT_S_DEFAULT']:.0f} s"
-            )
-        except Exception as e:  # noqa: BLE001 — node re-arms on startup
+            print(f"hardware watchdog armed: timeout {applied['WATCHDOG_TIMEOUT_S_DEFAULT']:.0f} s")
+        except Exception as e:
             print(f"WARNING: watchdog arm failed ({e}); node will retry on startup")
         return 0
     except ScriptLoadError as e:

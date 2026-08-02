@@ -160,7 +160,7 @@ class LjmDevice:
             try:
                 self.open()
                 return
-            except Exception as e:  # noqa: BLE001 — retry until device returns
+            except Exception as e:
                 last_err = e
                 time.sleep(0.5)
         raise DeviceError(f"device did not return after reboot: {last_err}")

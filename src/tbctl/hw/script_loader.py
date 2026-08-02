@@ -85,9 +85,7 @@ def stop_script(iface: DeviceInterface, timeout_s: float = 3.0) -> None:
     time.sleep(0.2)
 
 
-def _upload_and_run(
-    iface: DeviceInterface, payload: bytes, *, debug: bool = False
-) -> None:
+def _upload_and_run(iface: DeviceInterface, payload: bytes, *, debug: bool = False) -> None:
     iface.write_name("LUA_SOURCE_SIZE", len(payload))
     iface.write_name_bytes("LUA_SOURCE_WRITE", payload)
     iface.write_name("LUA_DEBUG_ENABLE", 1 if debug else 0)
@@ -159,7 +157,7 @@ def deploy_script(
                     iface.write_name("LUA_RUN_DEFAULT", 1)
                     last_err = None
                     break
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     last_err = e
                     time.sleep(0.5)
             if last_err is not None:
@@ -183,7 +181,7 @@ def deploy_script(
 
     try:
         v = _attempt(debug=False)
-    except Exception as e:  # noqa: BLE001 — USB drops mid-deploy; reboot recovers
+    except Exception as e:
         log.warning("deploy attempt failed (%s); rebooting", e)
         v = _reboot_and_retry(debug=True)
     else:

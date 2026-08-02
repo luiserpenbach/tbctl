@@ -59,14 +59,15 @@ for line in io.lines("lua/gen/registers_gen.lua") do
     if string.match(line, "^}") then
       current = nil
     else
-      local key, value = string.match(line, "^%s*([%w_]+)=(%-?%d+)")
+      -- hex first: "m=0xA55A" also matches the decimal pattern (as "0")
       local hkey, hval = string.match(line, "^%s*([%w_]+)=0x(%x+)")
-      if key then
-        local map = current == "A" and AKEY or KKEY
-        C[map[key]] = tonumber(value)
-      elseif hkey then
+      local key, value = string.match(line, "^%s*([%w_]+)=(%-?%d+)")
+      if hkey then
         local map = current == "A" and AKEY or KKEY
         C[map[hkey]] = tonumber(hval, 16)
+      elseif key then
+        local map = current == "A" and AKEY or KKEY
+        C[map[key]] = tonumber(value)
       end
     end
   end
@@ -233,5 +234,180 @@ push_fifo_bytes(bad)
 cmd(C.CMD_LOAD)
 check(getreg(C.ADDR_STATE) == C.ST_FAULT, "bad CRC -> FAULT")
 check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "ERR_BAD_TABLE")
+cmd(C.CMD_RESET)
+check(getreg(C.ADDR_STATE) == C.ST_IDLE, "RESET from FAULT")
+
+-- ---------------------------------------------------------------------------
+-- Full safety matrix (restored §10.2 coverage against the dense sequencer)
+-- ---------------------------------------------------------------------------
+local SAFE = 0x0000
+
+local function build_table(t)
+  -- t = {steps={{t,w},...}, abort={{t,w},...}, inhibit, safe, guard, mask}
+  local hdr = concat(
+    u16le(#t.steps), u16le(#t.abort),
+    u16le(t.inhibit or 0xFF80), u16le(t.safe or SAFE),
+    u16le(t.guard or 0), u16le(t.mask or 0)
+  )
+  local rows = {}
+  for _, s in ipairs(t.steps) do rows = concat(rows, u32le(s[1]), u16le(s[2])) end
+  for _, s in ipairs(t.abort) do rows = concat(rows, u32le(s[1]), u16le(s[2])) end
+  local payload = concat(hdr, rows)
+  local c = crcmod.crc16(payload, #payload)
+  return concat(payload, u16le(c)), c
+end
+
+local function load_table(t)
+  fifo_head, fifo_tail = 1, 0
+  local bytes, c = build_table(t)
+  push_fifo_bytes(bytes)
+  setreg(C.ADDR_FIFO_ALLOCATE, C.ALLOCATE_BYTES)
+  cmd(C.CMD_LOAD)
+  return c
+end
+
+local function do_arm(hb_timeout)
+  setreg(C.ADDR_HB_TIMEOUT_MS, hb_timeout or 500)
+  setreg(C.ADDR_HEARTBEAT, 7)
+  setreg(C.ADDR_ARM_CODE, C.ARM_MAGIC)
+  cmd(C.CMD_ARM)
+end
+
+local function beat()
+  setreg(C.ADDR_HEARTBEAT, (getreg(C.ADDR_HEARTBEAT) + 1) % 65536)
+end
+
+local STD = {
+  steps = { { 0, 0x0001 }, { 50, 0x0003 }, { 100, SAFE } },
+  abort = { { 0, SAFE }, { 20, SAFE } },
+  guard = 2000, mask = 0x0040,
+}
+
+-- lazy FIFO: freed after LOAD drains it
+load_table(STD)
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "reload after fault ok")
+check(getreg(C.ADDR_FIFO_ALLOCATE) == 0, "FIFO freed after LOAD (lazy alloc)")
+
+-- wrong ARM_CODE rejected; FIRE without ARM rejected
+setreg(C.ADDR_ARM_CODE, 0x1111)
+cmd(C.CMD_ARM)
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "wrong ARM_CODE rejected")
+cmd(C.CMD_FIRE)
+check(getreg(C.ADDR_STATE) == C.ST_LOADED, "FIRE without ARM rejected")
+
+-- exact edge timing: tick-by-tick, step@50 lands exactly at t+50
+do_arm(500)
+check(getreg(C.ADDR_STATE) == C.ST_ARMED, "re-armed with magic")
+check(dio_writes[#dio_writes].value == SAFE, "ARM applies safe word")
+local scan_from = #dio_writes + 1 -- only look at writes from THIS run
+cmd(C.CMD_FIRE)
+local fire_tick = now_tick - 1 -- elapsed==1 happened on the FIRE tick
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "re-fired")
+for i = 1, 110 do
+  step(1)
+  if i % 16 == 0 then beat() end
+end
+local edge50
+for k = scan_from, #dio_writes do
+  local w = dio_writes[k]
+  if w.value == 0x0003 and not edge50 then edge50 = w.tick end
+end
+check(edge50 == fire_tick + 50,
+  "step@50 applied exactly at t+50 ticks (got " .. tostring(edge50 and (edge50 - fire_tick)) .. ")")
+check(getreg(C.ADDR_STATE) == C.ST_DONE, "timed run completes")
+check(dio_writes[#dio_writes].value == SAFE, "ends at safe word")
+cmd(C.CMD_RESET)
+
+-- catch-up: one huge tick batch still applies every step in order
+load_table(STD)
+do_arm(500)
+cmd(C.CMD_FIRE)
+step(200)
+check(getreg(C.ADDR_STATE) == C.ST_DONE, "catch-up batch reaches DONE")
+check(dio_writes[#dio_writes].value == SAFE, "catch-up ends safe")
+cmd(C.CMD_RESET)
+
+-- host abort mid-run runs the abort table then holds safe word
+load_table({
+  steps = { { 0, 0x0001 }, { 5000, SAFE } },
+  abort = { { 0, SAFE }, { 20, SAFE } },
+  guard = 2000, mask = 0x0040,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+step(20); beat()
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "long run in progress")
+cmd(C.CMD_ABORT)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTING or getreg(C.ADDR_STATE) == C.ST_ABORTED, "host ABORT honored")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HOST_ABORT, "ERR_HOST_ABORT")
+step(30)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "abort table done -> ABORTED")
+check(dio_writes[#dio_writes].value == SAFE, "held at safe word after abort")
+cmd(C.CMD_RESET)
+
+-- heartbeat loss while RUNNING: 1 ms ticks (not a stall batch) -> HB abort
+load_table({
+  steps = { { 0, 0x0001 }, { 5000, SAFE } },
+  abort = { { 0, SAFE }, { 20, SAFE } },
+  guard = 2000, mask = 0x0040,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+for i = 1, 4 do step(100); beat() end
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "alive with heartbeats")
+for i = 1, 600 do step(1) end -- silence > 500 ms
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HB_TIMEOUT, "hb loss -> ERR_HB_TIMEOUT")
+step(100)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "hb loss ends ABORTED")
+cmd(C.CMD_RESET)
+
+-- heartbeat loss while ARMED
+load_table(STD)
+do_arm(500)
+check(getreg(C.ADDR_STATE) == C.ST_ARMED, "armed for hb test")
+for i = 1, 700 do step(1) end
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "armed hb loss -> ABORTED")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HB_TIMEOUT, "armed hb loss error code")
+cmd(C.CMD_RESET)
+
+-- spark guard: bit 6 held high past guard -> forced low + abort
+load_table({
+  steps = { { 0, 0x0040 }, { 5000, SAFE } },
+  abort = { { 0, SAFE } },
+  guard = 100, mask = 0x0040,
+})
+do_arm(500)
+cmd(C.CMD_FIRE)
+for i = 1, 50 do step(1) end
+beat()
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "spark on, pre-guard still running")
+for i = 1, 60 do step(1) end
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_SPARK_GUARD, "guard trip -> ERR_SPARK_GUARD")
+local forced_low = false
+for _, w in ipairs(dio_writes) do
+  if w.tick > fire_tick and w.value % 128 < 64 then forced_low = true end
+end
+check(forced_low, "spark bit forced low on trip")
+step(10)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "spark guard ends ABORTED")
+cmd(C.CMD_RESET)
+
+-- abort while ARMED goes straight to safe/ABORTED
+load_table(STD)
+do_arm(500)
+cmd(C.CMD_ABORT)
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "abort while armed -> ABORTED")
+check(dio_writes[#dio_writes].value == SAFE, "armed abort applies safe word")
+cmd(C.CMD_RESET)
+
+-- truncated upload -> FAULT
+fifo_head, fifo_tail = 1, 0
+local tb = build_table(STD)
+table.remove(tb) -- drop final byte
+push_fifo_bytes(tb)
+cmd(C.CMD_LOAD)
+check(getreg(C.ADDR_STATE) == C.ST_FAULT, "truncated upload -> FAULT")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_BAD_TABLE, "truncated error code")
+cmd(C.CMD_RESET)
 
 print(string.format("lua sequencer: %d/%d checks OK (real sequencer.lua executed)", checks, checks))

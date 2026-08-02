@@ -307,9 +307,14 @@ def generate(check: bool = False) -> int:
     for path, content in outputs.items():
         if check:
             existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-            # Ignore the timestamp line when comparing.
+            # Ignore environment-dependent lines when comparing: the timestamp
+            # and the LJM constants version (an installed ljm_constants.json is
+            # preferred over the vendored copy, and its version varies per host;
+            # the resolved ADDRESSES are still compared and must match).
             strip = lambda s: "\n".join(  # noqa: E731
-                ln for ln in s.splitlines() if "generated 2" not in ln
+                ln
+                for ln in s.splitlines()
+                if "generated 2" not in ln and "LJM_CONSTANTS_VERSION" not in ln
             )
             if strip(existing) != strip(content):
                 print(f"OUT OF SYNC: {path}", file=sys.stderr)
