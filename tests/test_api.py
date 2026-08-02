@@ -103,3 +103,39 @@ async def test_ws_frames(app_ctx):
     assert len(frames[-1]["data"][0]) > 0
     status = next(m for m in sent if m["type"] == "seq_status")
     assert status["state"] == "IDLE"
+
+
+async def test_ws_frame_timestamps_keep_float64_resolution(app_ctx):
+    """Epoch `t` must survive msgpack with sub-second uniqueness (not float32)."""
+    app, _ctx, _client = app_ctx
+    hub = app.state.hub
+
+    sent: list[dict] = []
+
+    class FakeWs:
+        def __init__(self):
+            self._inbox = asyncio.Queue()
+
+        async def accept(self):
+            pass
+
+        async def send_bytes(self, b: bytes):
+            sent.append(msgpack.unpackb(b))
+
+        async def receive_text(self):
+            return await self._inbox.get()
+
+    ws = FakeWs()
+    task = asyncio.create_task(hub.handle(ws))
+    await ws._inbox.put(json.dumps({"op": "subscribe", "tags": ["pressure.chamber"]}))
+    await asyncio.sleep(0.8)
+    task.cancel()
+
+    frames = [m for m in sent if m["type"] == "frame"]
+    assert frames, "expected live frames"
+    ts = [t for f in frames for t in f["t"]]
+    assert len(ts) >= 5
+    assert len(set(ts)) == len(ts), f"collapsed timestamps: {ts[:12]}"
+    # Distinct samples at 50 Hz / ~10 Hz emit must differ by well under 1 s.
+    assert max(ts) - min(ts) < 2.0
+    assert any(ts[i] != ts[i - 1] for i in range(1, len(ts)))

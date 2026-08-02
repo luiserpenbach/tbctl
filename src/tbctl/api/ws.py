@@ -35,7 +35,10 @@ class WsClient:
         self.t_last = time.time()
 
     async def send(self, msg: dict) -> None:
-        await self.ws.send_bytes(msgpack.packb(msg, use_single_float=True))
+        # Keep IEEE-754 binary64 for epoch timestamps. float32 near 1e9 s only
+        # resolves ~128 s, which collapses every sample in a frame onto one `t`
+        # and the frontend drops non-increasing timestamps.
+        await self.ws.send_bytes(msgpack.packb(msg, use_single_float=False))
 
 
 class WsHub:
@@ -101,13 +104,15 @@ class WsHub:
                 seq_status = None
             for c in list(self._clients):
                 try:
-                    now = time.time()
                     frames = self._ctx.acq.frames_since(
                         c.t_last, None if c.tags is None else sorted(c.tags)
                     )
-                    c.t_last = now
                     for f in frames:
                         await c.send(f)
+                        # Advance from sample times, not wall clock — otherwise
+                        # late-ingested points with t < now are skipped forever.
+                        if f.get("t"):
+                            c.t_last = max(c.t_last, float(f["t"][-1]))
                     if seq_status:
                         await c.send(seq_status)
                 except Exception:
