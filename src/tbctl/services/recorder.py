@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -88,6 +89,9 @@ class Recorder:
         self._unsubscribe = None
         self._flush_task: asyncio.Task | None = None
         self.sequence_sha256: str = ""  # set by the sequencer when a table is loaded
+        # called (blocking, in a thread) with the RunInfo after the file is
+        # closed — used for post-run review report generation
+        self.on_stop: Callable[[RunInfo], None] | None = None
 
     @property
     def active(self) -> RunInfo | None:
@@ -167,6 +171,11 @@ class Recorder:
         self._file = None
         self._run = None
         log.info("run %s stopped (%s samples)", run.run_id, run.sample_counts)
+        if self.on_stop is not None:
+            try:
+                await asyncio.to_thread(self.on_stop, run)
+            except Exception:
+                log.exception("post-stop hook failed for %s", run.run_id)
         return run
 
     # -- data & event ingest ----------------------------------------------
@@ -226,6 +235,10 @@ class Recorder:
         path = self._run_path(run_id)
         with h5py.File(path, "r") as f:
             return _meta_from(f, path)
+
+    def run_path(self, run_id: str) -> Path:
+        """Resolve a closed run's file path (KeyError / RecorderError)."""
+        return self._run_path(run_id)
 
     def _run_path(self, run_id: str) -> Path:
         if not re.match(r"^[a-zA-Z0-9_\-]+$", run_id):
@@ -324,7 +337,12 @@ class Recorder:
 def _meta_from(f: h5py.File, path: Path) -> dict:
     attrs = dict(f.attrs)
     counts = attrs.get("sample_counts")
+    report_summary = None
+    if raw := attrs.get("report_json"):
+        with contextlib.suppress(Exception):
+            report_summary = json.loads(raw).get("summary")
     return {
+        "report_summary": report_summary,
         "run_id": str(attrs.get("run_id", path.stem)),
         "name": str(attrs.get("name", "")),
         "operator": str(attrs.get("operator", "")),

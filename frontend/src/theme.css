@@ -556,6 +556,38 @@ tr.stale, .pid-sensor.stale { opacity: 0.35; }
 .csv-link { color: var(--text-faint); font-family: var(--mono); font-size: 10px; text-decoration: none; margin-left: 6px; }
 .csv-link:hover { color: var(--accent); }
 
+/* run report bar (post-run review) */
+.report-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.report-none { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.report-rule {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  padding: 1px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.report-rule.pass { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.report-rule.fail {
+  color: var(--red);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, var(--bg-inset));
+}
+.report-rule.skip { opacity: 0.5; }
+
 /* dashboard tabs: segmented-control strip like Sift's ALL / PASSED / FAILED */
 .dash-tabs {
   display: inline-flex;

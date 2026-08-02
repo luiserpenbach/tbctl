@@ -177,6 +177,33 @@ export const activateChecklist = (name: string | null) =>
 export const checkChecklistItem = (index: number, checked: boolean) =>
   post<{ active: ChecklistState | null }>("/api/checklists/check", { index, checked });
 
+// ------------------------------------------------------ run reports (tier 1)
+
+export interface ReviewResult {
+  name: string;
+  tag: string;
+  metric: string;
+  window: string;
+  limit_min: number | null;
+  limit_max: number | null;
+  value: number | null;
+  passed: boolean | null;
+  skipped: string | null;
+}
+
+export interface RunReport {
+  generated_at: number;
+  sequence: string | null;
+  fire_window: [number, number | null] | null;
+  results: ReviewResult[];
+  summary: { total: number; passed: number; failed: number; skipped: number };
+}
+
+export const fetchRunReport = (runId: string) =>
+  get<{ report: RunReport | null }>(`/api/runs/${runId}/report`);
+export const rerunRunReport = (runId: string) =>
+  post<{ report: RunReport }>(`/api/runs/${runId}/report/rerun`);
+
 // ------------------------------------------------------------- P&ID (ph. 13)
 
 export type PidElement =

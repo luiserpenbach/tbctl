@@ -17,8 +17,10 @@ from tbctl.config.models import (
     ChannelMap,
     Dashboard,
     PidConfig,
+    ReviewConfig,
     Sequence,
     cross_validate_pid,
+    cross_validate_review,
     cross_validate_sequence,
 )
 
@@ -112,12 +114,24 @@ def load_pid(path: Path, chmap: ChannelMap | None = None) -> Loaded[PidConfig]:
     return Loaded(pid, sha, path)
 
 
+def load_review(path: Path, chmap: ChannelMap | None = None) -> Loaded[ReviewConfig]:
+    data, sha = _read_yaml(path)
+    try:
+        cfg = ReviewConfig.model_validate(data)
+    except ValidationError as e:
+        raise ConfigError(_format_validation_error(path, e)) from e
+    if chmap is not None and (errors := cross_validate_review(cfg, chmap)):
+        raise ConfigError("\n".join(f"{path}: {msg}" for msg in errors))
+    return Loaded(cfg, sha, path)
+
+
 @dataclass
 class ConfigBundle:
     channels: Loaded[ChannelMap]
     sequences: dict[str, Loaded[Sequence]] = field(default_factory=dict)
     dashboards: dict[str, Loaded[Dashboard]] = field(default_factory=dict)
     pids: dict[str, Loaded[PidConfig]] = field(default_factory=dict)
+    review: Loaded[ReviewConfig] | None = None
 
 
 def load_config_dir(config_dir: Path) -> ConfigBundle:
@@ -126,6 +140,12 @@ def load_config_dir(config_dir: Path) -> ConfigBundle:
     channels = load_channels(config_dir / "channels.yaml")
     bundle = ConfigBundle(channels=channels)
     errors: list[str] = []
+    review_path = config_dir / "review.yaml"
+    if review_path.is_file():
+        try:
+            bundle.review = load_review(review_path, channels.model)
+        except ConfigError as e:
+            errors.append(str(e))
     for sub, loader, target in (
         ("sequences", load_sequence, bundle.sequences),
         ("dashboards", load_dashboard, bundle.dashboards),

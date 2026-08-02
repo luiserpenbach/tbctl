@@ -90,7 +90,7 @@ def build_context(
     sequencer = SequencerService(bundle, iface, acq, events)
     manual = ManualControl(chmap, iface, events)
     device_mgr = DeviceManager(chmap, iface, acq, events, mode)
-    return NodeContext(
+    ctx = NodeContext(
         device_mgr=device_mgr,
         bundle=bundle,
         iface=iface,
@@ -103,6 +103,22 @@ def build_context(
         config_dir=config_dir,
         data_dir=data_dir,
     )
+
+    def _post_stop_review(run) -> None:
+        """Evaluate review rules against the just-closed run (Sift-style
+        automated data review); reads ctx.bundle so hot-applied config edits
+        are picked up."""
+        from tbctl.services.review import evaluate_run, store_report
+
+        review = ctx.bundle.review
+        if review is None or not review.model.rules:
+            return
+        report = evaluate_run(review.model, run.path)
+        store_report(run.path, report)
+        events.log("run_report", run_id=run.run_id, **report["summary"])
+
+    recorder.on_stop = _post_stop_review
+    return ctx
 
 
 def build_app(ctx: NodeContext) -> FastAPI:

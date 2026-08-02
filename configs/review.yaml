@@ -1,0 +1,32 @@
+# Post-run review rules (Sift-style automated data review). Evaluated over
+# the recorded data every time a run stops; results are stored in the run
+# file as a pass/fail report. These never abort — live limits are redlines.
+rules:
+  # chamber pressure must stay under the structural limit while firing
+  - name: pc_peak
+    tag: pressure.chamber
+    metric: max
+    window: fire
+    limit_max: 25.0
+
+  # injector delta-p should never go deeply negative (backflow) during fire
+  - name: dp_ox_floor
+    tag: calc.dp_ox_inj
+    metric: min
+    window: fire
+    limit_min: -5.0
+
+  # wall temperature limit over the whole recording, hotfires only
+  - name: wall_temp_max
+    tag: temp.chamber_wall
+    metric: max
+    window: run
+    limit_max: 450.0
+    sequences: [hotfire_v1]
+
+  # sensor sanity: tank pressure must not read implausibly negative
+  - name: ox_tank_sane
+    tag: pressure.ox_tank
+    metric: min
+    window: run
+    limit_min: -2.0

@@ -432,6 +432,37 @@ def build_router(ctx: NodeContext) -> APIRouter:
         except KeyError as e:
             raise HTTPException(404, str(e)) from e
 
+    @r.get("/runs/{run_id}/report")
+    def run_report(run_id: str) -> dict:
+        from tbctl.services.recorder import RecorderError
+        from tbctl.services.review import load_report
+
+        try:
+            return {"report": load_report(ctx.recorder.run_path(run_id))}
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @r.post("/runs/{run_id}/report/rerun")
+    def run_report_rerun(run_id: str) -> dict:
+        """Re-evaluate the current review rules against a stored run."""
+        from tbctl.services.recorder import RecorderError
+        from tbctl.services.review import evaluate_run, store_report
+
+        if ctx.bundle.review is None or not ctx.bundle.review.model.rules:
+            raise HTTPException(409, "no review rules configured (configs/review.yaml)")
+        try:
+            path = ctx.recorder.run_path(run_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+        report = evaluate_run(ctx.bundle.review.model, path)
+        store_report(path, report)
+        ctx.events.log("run_report", run_id=run_id, rerun=True, **report["summary"])
+        return {"report": report}
+
     @r.get("/runs/{run_id}/events")
     def run_events(run_id: str) -> dict:
         from tbctl.services.recorder import RecorderError

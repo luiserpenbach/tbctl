@@ -442,6 +442,66 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Post-run review rules (Sift-style automated data review). Evaluated over
+# recorded data when a run stops — a monitoring/QA layer, never an abort
+# path (that's what redlines are for).
+# ---------------------------------------------------------------------------
+
+ReviewMetric = Literal["max", "min", "mean", "rms"]
+
+
+class ReviewRule(StrictModel):
+    name: str
+    tag: str  # any readable channel (physical or derived)
+    metric: ReviewMetric
+    # window "run" = whole recording; "fire" = seq_fired .. sequence end/abort
+    window: Literal["run", "fire"] = "run"
+    limit_min: float | None = None
+    limit_max: float | None = None
+    # only evaluate for runs that fired one of these sequences ([] = all runs)
+    sequences: list[str] = []
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", v):
+            raise ValueError(f"rule name {v!r} must be [a-zA-Z0-9_-]+")
+        return v
+
+    @model_validator(mode="after")
+    def _bounds(self) -> ReviewRule:
+        if self.limit_min is None and self.limit_max is None:
+            raise ValueError("review rule needs limit_min and/or limit_max")
+        if (
+            self.limit_min is not None
+            and self.limit_max is not None
+            and self.limit_min >= self.limit_max
+        ):
+            raise ValueError("limit_min must be < limit_max")
+        return self
+
+
+class ReviewConfig(StrictModel):
+    rules: list[ReviewRule] = []
+
+    @model_validator(mode="after")
+    def _validate(self) -> ReviewConfig:
+        names = [r.name for r in self.rules]
+        if dupes := {n for n in names if names.count(n) > 1}:
+            raise ValueError(f"duplicate rule names: {sorted(dupes)}")
+        return self
+
+
+def cross_validate_review(cfg: ReviewConfig, chmap: ChannelMap) -> list[str]:
+    readable = chmap.readable_tags()
+    return [
+        f"rule {r.name}: {r.tag!r} is not a readable channel"
+        for r in cfg.rules
+        if r.tag not in readable
+    ]
+
+
+# ---------------------------------------------------------------------------
 # P&ID mimic (roadmap v2 phase 13): background SVG + channel-bound elements.
 # Positions are normalized 0-1 against the background image box so the
 # panel scales with panel size.

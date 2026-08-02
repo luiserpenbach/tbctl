@@ -60,6 +60,11 @@ def validate_channels_payload(ctx, payload: dict) -> tuple[ChannelMap, list[str]
     for name, loaded in ctx.bundle.pids.items():
         for msg in cross_validate_pid(loaded.model, chmap):
             errors.append(f"pid {name}: {msg}")
+    if ctx.bundle.review is not None:
+        from tbctl.config.models import cross_validate_review
+
+        for msg in cross_validate_review(ctx.bundle.review.model, chmap):
+            errors.append(f"review: {msg}")
     return chmap, errors
 
 
