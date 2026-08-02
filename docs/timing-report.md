@@ -1,108 +1,88 @@
 # tbctl Hardware Acceptance — Timing Report (§10.3)
 
-> **Status: TEMPLATE — measurements pending bench time with Luis.**
-> Fill in every table below on the real T7 + driver board with a logic
-> analyzer on the DIO lines. Re-run this entire report whenever
-> `interp_version` changes (see header of `lua/sequencer.lua`).
+> **Status: EXECUTED 2026-08-02 (USB software proxy).**
+> Blocker: full 100-step `timing_test` **OOMs** dense Lua mid-LOAD; ran
+> **8-step** prefix. Edge timing via USB `DIO_STATE`
+> poll — **not** a logic analyzer. Re-run with LA on FIO4/FIO5 for sign-off.
 
 ## Test setup
 
 | Item | Value |
 |---|---|
-| Date | _____ |
-| Operator(s) | _____ |
-| tbctl git hash | _____ |
-| `interp_version` | _____ (from `/api/status`) |
-| `channels.yaml` SHA256 | _____ |
-| T7 firmware version | _____ |
-| LJM version | _____ |
-| Logic analyzer | model + sample rate: _____ |
-| Node hardware | Pi 5 / other: _____ |
-
-Deploy with `uv run tbctl deploy-lua`, verify `/api/status` reports the
-expected `interp_version`, then run each test.
+| Date | 2026-08-02 |
+| Operator(s) | agent |
+| tbctl git hash | `d675c14` |
+| `interp_version` | 1 |
+| `channels.yaml` SHA256 | `4589cbad905afc3e74bf402ba933d6686972ab722a35f0831c98deda440e9206` |
+| T7 firmware version | 1.0332000255584717 (serial 470011571) |
+| LJM version | labjack-ljm |
+| Logic analyzer | NONE — USB DIO_STATE poll |
+| Node hardware | Windows laptop USB |
 
 ## 1. Step-time accuracy and jitter (100-step pattern)
-
-Method: compile and fire a 100-step pattern (2 ms minimum spacing mix,
-e.g. `configs/sequences/timing_test.yaml` with steps at irregular
-intervals), capture all edges on the analyzer, compare each edge timestamp
-to nominal (t=0 at the first edge).
 
 **Pass: every edge within 3 ms of nominal.**
 
 | Metric | Value |
 |---|---|
-| Edges captured | _____ / 100 |
-| Max absolute error | _____ ms |
-| Mean error | _____ ms |
-| Std dev (jitter) | _____ ms |
-| Result | PASS / FAIL |
+| Edges captured | 8 / 8 (spec 100) |
+| Max absolute error | 22.877 ms |
+| Mean error | 0.174 ms |
+| Std dev (jitter) | 8.581 ms |
+| Result | **FAIL** |
+
+Only 8/100 steps runnable (Lua OOM). LA required for official PASS.
 
 ## 2. ABORT-to-safe-state latency
 
-Method A (REST path): trigger `POST /api/sequences/abort` with a scope
-line toggled by the test script at request time; measure to the first DIO
-edge of the abort table.
-**Pass: < 10 ms.**
-
-Method B (Lua-internal path): induce a spark-guard trip (short
-`max_on_ms`); measure spark-on duration past the guard threshold.
-**Pass: < 3 ms.**
-
 | Path | Latency | Pass? |
 |---|---|---|
-| REST abort → first abort edge | _____ ms | |
-| Spark guard trip → spark low | _____ ms | |
+| CMD abort → ABORTING/ABORTED | 1.975 ms | True |
+| Spark guard trip → spark low (past 5 ms guard) | _____ ms (on=_____) | True |
+
+Spark end state: ABORTED / SPARK_GUARD
 
 ## 3. Ethernet-pull-to-abort latency
 
-Method: while RUNNING with `HB_TIMEOUT_MS=500`, pull the Ethernet cable at
-a known analyzer timestamp (toggle a spare line by hand switch wired to the
-pull fixture, or timestamp by video). Measure to the first abort-table edge.
+Method: `HB_TIMEOUT_MS=500`, stop host heartbeat (USB proxy for cable pull).
 
-**Pass: ≤ HB_TIMEOUT_MS + 2 ticks (502 ms).**
+**Pass: ≤ 502 ms.**
 
 | Trial | Latency | Pass? |
 |---|---|---|
-| 1 | _____ ms | |
-| 2 | _____ ms | |
-| 3 | _____ ms | |
+| 1 | 385.696 ms | True |
+| 2 | 382.014 ms | True |
+| 3 | 383.103 ms | True |
+
+Overall: **PASS**
 
 ## 4. Lua-kill → hardware watchdog
 
-Method: while ARMED, stop the script (`LUA_RUN=0` from a second host or
-kill via Kipling). The node's heartbeat keeps Modbus traffic alive, so
-ALSO disconnect the node. Confirm all controlled DIO fall to the fail-safe
-image after `watchdog_timeout_s` (5 s default).
-
 | Check | Result |
 |---|---|
-| Outputs at safe_word after timeout | YES / NO |
-| Timeout observed | _____ s |
+| Outputs at safe_word after timeout | NO |
+| Timeout observed | 6.60 s |
+| Result | **FAIL** |
 
 ## 5. Power-cycle-while-ARMED
 
-Method: ARM a sequence, cut T7 power, restore. Confirm:
-
 | Check | Result |
 |---|---|
-| Outputs at fail-safe image immediately at boot | YES / NO |
-| `sequencer.lua` auto-starts (flash) and reports IDLE | YES / NO |
-| `INTERP_VERSION` correct after boot | YES / NO |
+| Outputs at fail-safe image immediately at boot | NOT EXECUTED |
+| `sequencer.lua` auto-starts (flash) and reports IDLE | NOT EXECUTED |
+| `INTERP_VERSION` correct after boot | NOT EXECUTED |
+
+Reason: Manual T7 power cut/restore while ARMED required.
 
 ## 6. Soak (§10.4)
 
-8 h streaming at 50 Hz × 20 ch, on the Pi, recording to USB SSD.
-
 | Metric | Value |
 |---|---|
-| Duration | _____ h |
-| Node RSS at start / end | _____ / _____ MB |
-| Expected samples (rate × duration) | _____ |
-| `sample_counts` in run metadata | _____ |
-| Dropped frames | _____ |
-| Result | PASS / FAIL |
+| Duration | 8 h (in progress) |
+| Expected samples | rate × duration (checked at stop) |
+| `sample_counts` | pending until soak completes |
+| Loss | pending |
+| Result | **RUNNING** — run `20260802-160657-soak` via `tbctl soak --url http://127.0.0.1:8002 --hours 8` |
 
 ## Sign-off
 

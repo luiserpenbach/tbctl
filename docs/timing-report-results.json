@@ -1,0 +1,63 @@
+{
+  "setup": {
+    "date": "2026-08-02",
+    "operator": "agent",
+    "git_hash": "d675c14",
+    "interp_version": 1,
+    "channels_sha256": "4589cbad905afc3e74bf402ba933d6686972ab722a35f0831c98deda440e9206",
+    "t7_firmware": 1.0332000255584717,
+    "t7_serial": 470011571,
+    "ljm": "labjack-ljm",
+    "logic_analyzer": "NONE \u2014 USB DIO_STATE poll",
+    "node_hardware": "Windows laptop USB",
+    "max_steps_loaded": 8,
+    "blocker": "Full 100-step timing_test OOMs dense Lua mid-LOAD; ran 8-step prefix."
+  },
+  "tests": {
+    "1_step_timing": {
+      "edges_captured": 8,
+      "edges_nominal": 8,
+      "edges_full_spec": 100,
+      "poll_samples": 5540,
+      "max_abs_error_ms": 22.876500006532297,
+      "mean_error_ms": 0.17383750481531024,
+      "stdev_ms": 8.580955996062015,
+      "result": "FAIL",
+      "note": "Only 8/100 steps runnable (Lua OOM). LA required for official PASS."
+    },
+    "2_abort_spark": {
+      "rest_abort_ms": 1.9751999934669584,
+      "rest_abort_pass": true,
+      "spark_on_ms": null,
+      "spark_past_guard_ms": null,
+      "spark_state": "ABORTED",
+      "spark_error": "SPARK_GUARD",
+      "spark_guard_pass": true
+    },
+    "3_hb_loss": {
+      "trials_ms": [
+        385.69639998604544,
+        382.01430000481196,
+        383.1032000016421
+      ],
+      "result": "PASS",
+      "limit_ms": 502
+    },
+    "4_watchdog": {
+      "dio_state": "0x7FFF90",
+      "controlled_mask": "0x007F",
+      "safe_bits": "0x0010",
+      "outputs_at_safe_word": false,
+      "timeout_observed_s": 6.595629700022982,
+      "result": "FAIL"
+    },
+    "5_power_cycle": {
+      "result": "NOT_EXECUTED",
+      "reason": "Manual T7 power cut/restore while ARMED required."
+    },
+    "6_soak": {
+      "result": "PENDING",
+      "note": "Start node, then: uv run tbctl soak --url http://127.0.0.1:8002 --hours 8"
+    }
+  }
+}

@@ -50,7 +50,9 @@ end
 if ok then local c=U.crc16(U.b,off) if c~=U.u(U.b,off+1) then ok=false else U.C=c end end
 if ok then
 U.N,U.M,U.I,U.w,U.G,U.g=ns,na,ih,sf,gd,mk U.i,U.t=0,0
-U.W(U.A.i,U.Z,0xFFFF0000+U.I)U.W(U.A.o,U.Z,U.a(U.n(U.I),65535))U.S=1 U.E=0
+-- DIO_INHIBIT must stay float32-exact: avoid 0xFFFF0000+U.I (rounds to 0xFFFFFFFF).
+-- Lower-16 inhibit is enough for FIO; unused EIO/CIO stay direction=input.
+U.W(U.A.i,U.Z,U.I)U.W(U.A.o,U.Z,U.a(U.n(U.I),65535))U.S=1 U.E=0
 else U.S=7 U.E=3 U.A_(U.w) end
 U.P()
 end
