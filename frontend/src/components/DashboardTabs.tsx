@@ -87,7 +87,7 @@ export function DashboardTabs() {
                 saveDashboard(dashboard.name, dashboard).catch((e) => alert(String(e)))
               }
             >
-              save
+              Save
             </button>
           )}
         </>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchPids } from "../api";
 import { useStore } from "../store";
 import type { PanelConfig } from "../types";
+import { PANEL_TITLES } from "./DashboardGrid";
 
 const PANEL_TYPES: PanelConfig["type"][] = [
   "timeseries",
@@ -154,7 +155,7 @@ export function PanelModal({
             >
               {PANEL_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t.replace("_", " ")}
+                  {PANEL_TITLES[t]}
                 </option>
               ))}
             </select>

@@ -36,19 +36,19 @@ export function StatusBar() {
         className={`btn ${view === "dashboard" ? "active" : ""}`}
         onClick={() => setView("dashboard")}
       >
-        dash
+        Dashboard
       </button>
       <button
         className={`btn ${view === "channels" ? "active" : ""}`}
         onClick={() => setView("channels")}
       >
-        channels
+        Channels
       </button>
       <button
         className={`btn ${view === "sequences" ? "active" : ""}`}
         onClick={() => setView("sequences")}
       >
-        sequences
+        Sequences
       </button>
       <button className={`btn ${view === "pid" ? "active" : ""}`} onClick={() => setView("pid")}>
         P&amp;ID
@@ -82,7 +82,7 @@ export function StatusBar() {
           )
         }
       >
-        {status?.control_enabled ? "CONTROL ON" : "control off"}
+        {status?.control_enabled ? "Control on" : "Control off"}
       </button>
       {editMode && dashboard && (
         <button
@@ -93,14 +93,14 @@ export function StatusBar() {
               .catch((e) => alert(String(e)))
           }
         >
-          save
+          Save layout
         </button>
       )}
       <button
         className={`btn ${editMode ? "active" : ""}`}
         onClick={() => setEditMode(!editMode)}
       >
-        {editMode ? "done" : "edit"}
+        {editMode ? "Done" : "Edit"}
       </button>
     </header>
   );

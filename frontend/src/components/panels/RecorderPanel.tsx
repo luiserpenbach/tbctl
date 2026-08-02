@@ -82,7 +82,7 @@ export function RecorderPanel() {
           <div style={{ display: "flex", gap: 4 }}>
             <input
               style={inputStyle}
-              placeholder="note / bookmark…"
+              placeholder="Note / bookmark…"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addNote()}
@@ -98,9 +98,9 @@ export function RecorderPanel() {
         </>
       ) : (
         <>
-          <input style={inputStyle} placeholder="run name" value={name} onChange={(e) => setName(e.target.value)} />
-          <input style={inputStyle} placeholder="operator" value={operator} onChange={(e) => setOperator(e.target.value)} />
-          <input style={inputStyle} placeholder="notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <input style={inputStyle} placeholder="Run name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input style={inputStyle} placeholder="Operator" value={operator} onChange={(e) => setOperator(e.target.value)} />
+          <input style={inputStyle} placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           <button className="btn" onClick={doStart} disabled={busy} style={{ marginTop: "auto" }}>
             ● start run
           </button>

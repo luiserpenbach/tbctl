@@ -5,16 +5,23 @@ import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
 
+// Sift-like series colors: vivid, high-contrast on black
 const PALETTE = [
-  "#4cc9f0",
-  "#f72585",
-  "#ffd166",
-  "#06d6a0",
-  "#a78bfa",
-  "#ff924c",
-  "#43aa8b",
-  "#ef476f",
+  "#3fd158",
+  "#4a9eff",
+  "#e26ee8",
+  "#f0883e",
+  "#e3b341",
+  "#39c5cf",
+  "#f778ba",
+  "#8b949e",
 ];
+const AXIS = {
+  stroke: "#9e9ea4",
+  font: "10px 'IBM Plex Mono', monospace",
+  grid: { stroke: "#1b1b1b", width: 1 },
+  ticks: { stroke: "#262626" },
+};
 
 const SYNC_KEY = uPlot.sync("tbctl");
 const DEFAULT_WINDOW_S = 60;
@@ -91,19 +98,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             ? { auto: false, range: [panel.y_axis.min ?? 0, panel.y_axis.max ?? 1] }
             : { auto: true },
       },
-      axes: [
-        {
-          stroke: "#7d8794",
-          grid: { stroke: "#1c2330", width: 1 },
-          ticks: { stroke: "#232a36" },
-        },
-        {
-          stroke: "#7d8794",
-          grid: { stroke: "#1c2330", width: 1 },
-          ticks: { stroke: "#232a36" },
-          size: 52,
-        },
-      ],
+      axes: [{ ...AXIS }, { ...AXIS, size: 52 }],
       series: [
         {},
         ...tags.map((tag, i) => ({
@@ -235,11 +230,12 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
           <span
             key={tag}
             className={`series-chip ${hidden.has(tag) ? "off" : ""}`}
-            style={{ color: PALETTE[i % PALETTE.length] }}
             onClick={() => toggleTag(tag)}
             title={unitOf(tag)}
           >
+            <span className="swatch" style={{ background: PALETTE[i % PALETTE.length] }} />
             {tag}
+            {unitOf(tag) && <span className="legend-unit">({unitOf(tag)})</span>}
           </span>
         ))}
       </div>

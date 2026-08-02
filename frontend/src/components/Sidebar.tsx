@@ -46,7 +46,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <input
         className="search"
-        placeholder="filter channels…"
+        placeholder="Filter channels…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />

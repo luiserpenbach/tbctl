@@ -15,6 +15,18 @@ import { ValvePanel } from "./panels/ValvePanel";
 
 const Grid = WidthProvider(GridLayout);
 
+export const PANEL_TITLES: Record<PanelConfig["type"], string> = {
+  timeseries: "Time Series",
+  value_table: "Live Values",
+  valve_panel: "Valve Control",
+  sequence_panel: "Sequence",
+  recorder_panel: "Recorder",
+  raw_table: "Raw Channels",
+  sim_panel: "Simulator",
+  pid: "P&ID",
+  checklist_panel: "Checklist",
+};
+
 function PanelBody({ panel }: { panel: PanelConfig }) {
   switch (panel.type) {
     case "timeseries":
@@ -73,10 +85,10 @@ export function DashboardGrid() {
     {editMode && (
       <div className="edit-toolbar">
         <button className="btn" onClick={() => setModal("new")}>
-          + add panel
+          + Add panel
         </button>
-        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-          drag headers to move · drag corners to resize · save via the tab bar
+        <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
+          Drag headers to move · drag corners to resize · Save in the top bar
         </span>
       </div>
     )}
@@ -104,7 +116,7 @@ export function DashboardGrid() {
         <div key={p.id}>
           <div className="panel">
             <div className="panel-header">
-              <span className="drag-handle">{p.type.replace("_", " ")}</span>
+              <span className="drag-handle">{PANEL_TITLES[p.type] ?? p.type}</span>
               <span>{p.id}</span>
               {editMode && (
                 <>
