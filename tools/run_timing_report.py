@@ -2,8 +2,9 @@
 
 Notes
 -----
-* Full 100-step `timing_test` currently OOMs the dense T7 Lua VM mid-LOAD
-  (CMD cleared, STATE stays IDLE). Largest working prefix on this bench: 8 steps.
+* The LOAD path now stream-parses the FIFO (no byte buffer), which fixed the
+  Lua OOM that previously capped this bench at an 8-step prefix — the full
+  100-step timing_test is attempted; MAX_STEPS is only a fallback knob.
 * Edge timing uses host USB polling of DIO_STATE — not a logic analyzer.
 * Test 5 (power cycle) is manual.
 """
@@ -33,7 +34,7 @@ from tbctl.services.compiler import compile_sequence
 REPO = Path(__file__).resolve().parents[1]
 OUT_JSON = REPO / "docs" / "timing-report-results.json"
 REPORT = REPO / "docs" / "timing-report.md"
-MAX_STEPS = 8  # largest timing_test prefix that LOADs without wedging Lua
+MAX_STEPS = 100  # full timing_test; streaming LOAD parse removed the OOM cap
 BIT = {"valve.purge": 4, "valve.ox_pre": 5, "spark.igniter": 6}
 
 
@@ -196,18 +197,18 @@ def setup_meta(dev: LjmDevice) -> dict:
         "logic_analyzer": "NONE — USB DIO_STATE poll",
         "node_hardware": "Windows laptop USB",
         "max_steps_loaded": MAX_STEPS,
-        "blocker": "Full 100-step timing_test OOMs dense Lua mid-LOAD; ran 8-step prefix.",
+        "notes": f"timing_test prefix: {MAX_STEPS} steps (streaming LOAD parse; OOM cap removed).",
     }
 
 
 def test1(dev: LjmDevice, chmap) -> dict:
-    print("\n=== 1. Step timing (8-step prefix; 100-step OOMs) ===")
+    print(f"\n=== 1. Step timing ({MAX_STEPS}-step pattern) ===")
     seq = timing_prefix(MAX_STEPS)
     compiled = compile_sequence(seq, chmap)
     upload_compiled(dev, compiled)
     arm_fire(dev, hb_ms=5000)
-    # last step ~0.243 s for first 10; use 1s window
-    samples = poll_dio(dev, 1.5, hb=True)
+    # poll for the whole pattern (100 steps ~= 4 s) plus settle margin
+    samples = poll_dio(dev, compiled.duration_ms / 1000.0 + 0.6, hb=True)
     st = SeqState(int(dev.read_name(REG_NAME["STATE"])))
     print("final", st.name, "samples", len(samples))
 
@@ -444,7 +445,7 @@ def fill_report(results: dict) -> None:
         f"""# tbctl Hardware Acceptance — Timing Report (§10.3)
 
 > **Status: EXECUTED {s.get("date")} (USB software proxy).**
-> Blocker: full 100-step `timing_test` **OOMs** dense Lua mid-LOAD; ran
+> Note: streaming LOAD parse removed the earlier OOM cap; ran
 > **{s.get("max_steps_loaded")}-step** prefix. Edge timing via USB `DIO_STATE`
 > poll — **not** a logic analyzer. Re-run with LA on FIO4/FIO5 for sign-off.
 
