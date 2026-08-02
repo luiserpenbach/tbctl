@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { fetchChannels, fetchDashboard, fetchDashboards, fetchStatus } from "./api";
 import { AlarmBanner } from "./components/AlarmBanner";
 import { DashboardGrid } from "./components/DashboardGrid";
+import { DashboardTabs } from "./components/DashboardTabs";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { useStore } from "./store";
@@ -15,9 +16,9 @@ export default function App() {
     fetchChannels().then((r) => useStore.getState().setChannels(r.channels));
     fetchDashboards().then(async (r) => {
       useStore.getState().setDashboards(r.dashboards);
-      if (r.dashboards.length) {
-        useStore.getState().setDashboard(await fetchDashboard(r.dashboards[0]));
-      }
+      const last = localStorage.getItem("tbctl.dashboard");
+      const pick = last && r.dashboards.includes(last) ? last : r.dashboards[0];
+      if (pick) useStore.getState().setDashboard(await fetchDashboard(pick));
     });
     const poll = () => fetchStatus().then((s) => useStore.getState().setStatus(s)).catch(() => {});
     poll();
@@ -32,6 +33,7 @@ export default function App() {
       <div className="app-body">
         {sidebarOpen && <Sidebar />}
         <main className="app-main">
+          <DashboardTabs />
           <DashboardGrid />
         </main>
       </div>

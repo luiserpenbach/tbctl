@@ -73,3 +73,16 @@ async def test_dashboard_save(client):
 
     dash["panels"][0]["x"] = 99  # overflows grid -> 422
     assert (await client.post("/api/dashboards/hotfire_main", json=dash)).status_code == 422
+
+
+async def test_dashboard_create_and_delete(client):
+    # last remaining dashboard cannot be deleted
+    assert (await client.delete("/api/dashboards/hotfire_main")).status_code == 409
+    body = {"name": "scratch", "grid": {"cols": 12, "row_height_px": 40}, "panels": []}
+    assert (await client.post("/api/dashboards/scratch", json=body)).status_code == 200
+    names = (await client.get("/api/dashboards")).json()["dashboards"]
+    assert "scratch" in names
+    assert (await client.delete("/api/dashboards/scratch")).status_code == 200
+    names = (await client.get("/api/dashboards")).json()["dashboards"]
+    assert "scratch" not in names
+    assert (await client.delete("/api/dashboards/scratch")).status_code == 404

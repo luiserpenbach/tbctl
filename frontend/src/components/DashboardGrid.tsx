@@ -1,7 +1,8 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import { useStore } from "../store";
 import type { PanelConfig } from "../types";
+import { PanelModal } from "./PanelModal";
 import { RecorderPanel } from "./panels/RecorderPanel";
 import { SequencePanel } from "./panels/SequencePanel";
 import { TimeseriesPanel } from "./panels/TimeseriesPanel";
@@ -29,6 +30,9 @@ export function DashboardGrid() {
   const dashboard = useStore((s) => s.dashboard);
   const editMode = useStore((s) => s.editMode);
   const updatePanelLayout = useStore((s) => s.updatePanelLayout);
+  const removePanel = useStore((s) => s.removePanel);
+  // null = closed; "new" = add-panel; PanelConfig = configure existing
+  const [modal, setModal] = useState<"new" | PanelConfig | null>(null);
   // avoid feedback loops: RGL fires onLayoutChange on mount too
   const dragging = useRef(false);
 
@@ -53,8 +57,19 @@ export function DashboardGrid() {
   };
 
   return (
+    <>
+    {editMode && (
+      <div className="edit-toolbar">
+        <button className="btn" onClick={() => setModal("new")}>
+          + add panel
+        </button>
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          drag headers to move · drag corners to resize · save via the tab bar
+        </span>
+      </div>
+    )}
     <Grid
-      className="layout"
+      className={`layout ${editMode ? "editing" : ""}`}
       layout={layout}
       cols={dashboard.grid.cols}
       rowHeight={dashboard.grid.row_height_px}
@@ -79,6 +94,16 @@ export function DashboardGrid() {
             <div className="panel-header">
               <span className="drag-handle">{p.type.replace("_", " ")}</span>
               <span>{p.id}</span>
+              {editMode && (
+                <>
+                  <button className="panel-btn" title="configure" onClick={() => setModal(p)}>
+                    ⚙
+                  </button>
+                  <button className="panel-btn" title="remove" onClick={() => removePanel(p.id)}>
+                    ✕
+                  </button>
+                </>
+              )}
             </div>
             <div className="panel-body">
               <PanelBody panel={p} />
@@ -87,5 +112,9 @@ export function DashboardGrid() {
         </div>
       ))}
     </Grid>
+    {modal !== null && (
+      <PanelModal panel={modal === "new" ? null : modal} onClose={() => setModal(null)} />
+    )}
+    </>
   );
 }

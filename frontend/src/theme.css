@@ -354,6 +354,116 @@ button.btn.confirm {
 .event-row .event-time { color: var(--text-faint); flex-shrink: 0; }
 .event-row .event-text { overflow: hidden; text-overflow: ellipsis; }
 
+/* dashboard tabs */
+.dash-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 0 2px 8px;
+}
+.dash-tab {
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dash-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg-panel);
+}
+.tab-x {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+.tab-x:hover { color: var(--red); }
+
+/* edit mode */
+.edit-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 0 2px 8px;
+}
+.layout.editing .panel { border: 1px dashed var(--accent); }
+.layout.editing .panel-header { cursor: move; }
+.panel-btn {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+.panel-btn:hover { color: var(--accent); }
+
+/* modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  min-width: 380px;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.modal-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.modal-row { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.modal-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+  flex: 1;
+}
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.chan-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+}
+.chan-picker-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.chan-picker-row:hover { background: var(--bg-hover); }
+
 /* react-grid-layout */
 .react-grid-item.react-grid-placeholder {
   background: var(--accent);

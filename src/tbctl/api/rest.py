@@ -309,6 +309,18 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(404, f"unknown dashboard {name!r}")
         return ctx.bundle.dashboards[name].model.model_dump()
 
+    @r.delete("/dashboards/{name}")
+    def dashboard_delete(name: str) -> dict:
+        if name not in ctx.bundle.dashboards:
+            raise HTTPException(404, f"unknown dashboard {name!r}")
+        if len(ctx.bundle.dashboards) <= 1:
+            raise HTTPException(409, "cannot delete the last dashboard")
+        path = ctx.bundle.dashboards[name].path
+        path.unlink(missing_ok=True)
+        del ctx.bundle.dashboards[name]
+        ctx.events.log("dashboard_deleted", name=name)
+        return {"ok": True}
+
     @r.post("/dashboards/{name}")
     def dashboard_save(name: str, body: dict) -> dict:
         """Edit-mode save: validate and write back as YAML (§4.3)."""

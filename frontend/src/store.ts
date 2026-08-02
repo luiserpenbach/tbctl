@@ -4,6 +4,7 @@ import type {
   DashboardConfig,
   EventRecord,
   NodeStatus,
+  PanelConfig,
   RunMeta,
   SeqStatusMsg,
 } from "./types";
@@ -38,6 +39,9 @@ interface TbctlStore {
   toggleSidebar: () => void;
   updatePanelLayout: (id: string, x: number, y: number, w: number, h: number) => void;
   updatePanelChannels: (id: string, channels: string[]) => void;
+  addPanel: (p: PanelConfig) => void;
+  removePanel: (id: string) => void;
+  updatePanel: (id: string, patch: Partial<PanelConfig>) => void;
 }
 
 export const useStore = create<TbctlStore>((set) => ({
@@ -86,4 +90,25 @@ export const useStore = create<TbctlStore>((set) => ({
         },
       };
     }),
+  addPanel: (p) =>
+    set((s) =>
+      s.dashboard ? { dashboard: { ...s.dashboard, panels: [...s.dashboard.panels, p] } } : s,
+    ),
+  removePanel: (id) =>
+    set((s) =>
+      s.dashboard
+        ? { dashboard: { ...s.dashboard, panels: s.dashboard.panels.filter((p) => p.id !== id) } }
+        : s,
+    ),
+  updatePanel: (id, patch) =>
+    set((s) =>
+      s.dashboard
+        ? {
+            dashboard: {
+              ...s.dashboard,
+              panels: s.dashboard.panels.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+            },
+          }
+        : s,
+    ),
 }));
