@@ -68,7 +68,14 @@ export type WsMsg = FrameMsg | SeqStatusMsg | EventMsg;
 
 export interface PanelConfig {
   id: string;
-  type: "timeseries" | "value_table" | "valve_panel" | "sequence_panel" | "recorder_panel";
+  type:
+    | "timeseries"
+    | "value_table"
+    | "valve_panel"
+    | "sequence_panel"
+    | "recorder_panel"
+    | "raw_table"
+    | "sim_panel";
   x: number;
   y: number;
   w: number;

@@ -149,6 +149,33 @@ def build_router(ctx: NodeContext) -> APIRouter:
     def events(limit: Annotated[int, Query(gt=0, le=500)] = 100) -> dict:
         return {"events": ctx.events.tail(limit)}
 
+    @r.get("/raw")
+    def raw() -> dict:
+        """Raw-vs-EU snapshot of every input channel (wiring checkout)."""
+        chmap = ctx.bundle.channels.model
+        raw_v = ctx.acq.latest_raw()
+        eu_v = ctx.acq.latest_values()
+        rows = []
+        for c in chmap.inputs():
+            rows.append(
+                {
+                    "tag": c.tag,
+                    "hw": c.hw,
+                    "kind": c.kind,
+                    "unit": c.unit,
+                    "rate_hz": chmap.rate_groups[c.rate_group].rate_hz,
+                    "raw": raw_v.get(c.tag),
+                    "value": eu_v.get(c.tag),
+                }
+            )
+        return {"channels": rows}
+
+    @r.get("/sim/setpoints")
+    def sim_setpoints() -> dict:
+        if not ctx.iface.is_sim:
+            raise HTTPException(409, "not in simulator mode")
+        return {"setpoints": ctx.iface.sim_setpoints()}
+
     # -------------------------------------------------------- sequencer
 
     @r.get("/sequences")

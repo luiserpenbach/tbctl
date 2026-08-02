@@ -3,8 +3,10 @@ import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import { useStore } from "../store";
 import type { PanelConfig } from "../types";
 import { PanelModal } from "./PanelModal";
+import { RawTablePanel } from "./panels/RawTablePanel";
 import { RecorderPanel } from "./panels/RecorderPanel";
 import { SequencePanel } from "./panels/SequencePanel";
+import { SimPanel } from "./panels/SimPanel";
 import { TimeseriesPanel } from "./panels/TimeseriesPanel";
 import { ValueTablePanel } from "./panels/ValueTablePanel";
 import { ValvePanel } from "./panels/ValvePanel";
@@ -23,6 +25,10 @@ function PanelBody({ panel }: { panel: PanelConfig }) {
       return <SequencePanel />;
     case "recorder_panel":
       return <RecorderPanel />;
+    case "raw_table":
+      return <RawTablePanel />;
+    case "sim_panel":
+      return <SimPanel />;
   }
 }
 

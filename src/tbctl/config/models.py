@@ -393,7 +393,15 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
 # §4.3 dashboard
 # ---------------------------------------------------------------------------
 
-PanelType = Literal["timeseries", "value_table", "valve_panel", "sequence_panel", "recorder_panel"]
+PanelType = Literal[
+    "timeseries",
+    "value_table",
+    "valve_panel",
+    "sequence_panel",
+    "recorder_panel",
+    "raw_table",
+    "sim_panel",
+]
 
 
 class GridConfig(StrictModel):

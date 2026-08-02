@@ -8,6 +8,8 @@ const PANEL_TYPES: PanelConfig["type"][] = [
   "valve_panel",
   "sequence_panel",
   "recorder_panel",
+  "raw_table",
+  "sim_panel",
 ];
 
 const NEEDS_CHANNELS = new Set(["timeseries", "value_table"]);

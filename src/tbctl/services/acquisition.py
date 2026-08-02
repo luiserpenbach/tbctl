@@ -171,6 +171,8 @@ class AcquisitionService:
         self._tag_group = {c.tag: c.rate_group for c in inputs}
         self._cj_degc = 25.0
         self._cj_read_at = 0.0
+        # latest raw volts per tag (for the raw channel viewer)
+        self._latest_raw: dict[str, float] = {}
         # listeners get (group_name, t_epoch, eu_block) after every ingest
         self._listeners: list[Callable[[str, np.ndarray, np.ndarray], None]] = []
 
@@ -234,6 +236,7 @@ class AcquisitionService:
         eu = np.empty_like(volts)
         for j, conv in enumerate(self._converters):
             eu[:, j] = conv(volts[:, j], self._cj_degc)
+            self._latest_raw[self._scan_channels[j].tag] = float(volts[-1, j])
         for group, ring in self.rings.items():
             decim = self._group_decim[group]
             mask = idx % decim == 0
@@ -298,3 +301,7 @@ class AcquisitionService:
         for ring in self.rings.values():
             out.update(ring.latest())
         return out
+
+    def latest_raw(self) -> dict[str, float]:
+        """Most recent raw voltage per input tag (pre-calibration)."""
+        return dict(self._latest_raw)

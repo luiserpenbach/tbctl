@@ -85,3 +85,21 @@ async def test_sim_set_still_works_after_switch(client):
     await client.post("/api/connection", json={"mode": "sim"})
     r = await client.post("/api/sim/set", json={"tag": "pressure.chamber", "value": 7.5})
     assert r.status_code == 200
+
+
+async def test_raw_endpoint(client):
+    ctx = client.ctx
+    ctx.iface.sim_set("pressure.chamber", 10.0, noise_sigma_eu=0.0)  # 25 bar/V -> 0.4 V
+    await asyncio.sleep(0.4)
+    rows = (await client.get("/api/raw")).json()["channels"]
+    chamber = next(r for r in rows if r["tag"] == "pressure.chamber")
+    assert chamber["hw"] == "AIN0" and chamber["rate_hz"] == 50
+    assert chamber["raw"] == pytest.approx(0.4, abs=0.02)
+    assert chamber["value"] == pytest.approx(10.0, rel=0.05)
+    assert len(rows) == len([c for c in ctx.bundle.channels.model.inputs()])
+
+
+async def test_sim_setpoints_endpoint(client):
+    await client.post("/api/sim/set", json={"tag": "pressure.ox_tank", "value": 42.0})
+    sp = (await client.get("/api/sim/setpoints")).json()["setpoints"]
+    assert sp["pressure.ox_tank"] == 42.0
