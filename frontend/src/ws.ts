@@ -30,8 +30,7 @@ function openSocket() {
     } else if (msg.type === "seq_status") {
       useStore.getState().setSeqStatus(msg);
     } else if (msg.type === "event") {
-      // events surface through the status poll for now; log for debugging
-      console.info("event:", msg);
+      useStore.getState().pushEvent(msg);
     }
   };
 

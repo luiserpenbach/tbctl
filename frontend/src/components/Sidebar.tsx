@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchRuns } from "../api";
 import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
+import { EventFeed } from "./EventFeed";
 
 export function Sidebar() {
   const channels = useStore((s) => s.channels);
@@ -97,6 +98,7 @@ export function Sidebar() {
           </div>
         ))}
       </div>
+      <EventFeed />
     </aside>
   );
 }

@@ -109,3 +109,16 @@ def test_event_log_jsonl(tmp_path):
     assert len(files) == 1
     line = json.loads(files[0].read_text().strip())
     assert line["event"] == "fire" and line["time"] == rec["time"]
+
+
+def test_event_log_tail(tmp_path):
+    ev = EventLog(tmp_path)
+    for i in range(10):
+        ev.log("tick", n=i)
+    tail = ev.tail(limit=3)
+    assert [e["n"] for e in tail] == [9, 8, 7]  # newest first
+    assert ev.tail(limit=100)[-1]["n"] == 0
+    # corrupt line is skipped, not fatal
+    f = next(tmp_path.glob("events-*.jsonl"))
+    f.write_text(f.read_text() + "not json\n")
+    assert ev.tail(limit=5)[0]["n"] == 9

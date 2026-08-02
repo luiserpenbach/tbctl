@@ -316,6 +316,44 @@ button.btn.confirm {
 .valve-btns { display: flex; gap: 3px; margin-top: 4px; justify-content: center; }
 .valve-btns .btn { font-size: 10px; padding: 1px 6px; }
 
+/* alarm banner */
+.alarm-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 6px 12px;
+  background: #7a1210;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 13px;
+  border-bottom: 1px solid var(--red);
+}
+.alarm-banner.active { animation: pulse 0.8s infinite; }
+
+/* event feed */
+.event-feed {
+  border-top: 1px solid var(--border);
+  max-height: 180px;
+  overflow-y: auto;
+  flex-shrink: 0;
+  padding: 0 4px 8px;
+}
+.event-row {
+  display: flex;
+  gap: 6px;
+  padding: 1px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.event-row.alarm { color: var(--red); }
+.event-row.dim { color: var(--text-faint); }
+.event-row .event-time { color: var(--text-faint); flex-shrink: 0; }
+.event-row .event-text { overflow: hidden; text-overflow: ellipsis; }
+
 /* react-grid-layout */
 .react-grid-item.react-grid-placeholder {
   background: var(--accent);

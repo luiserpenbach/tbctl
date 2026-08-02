@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { fetchChannels, fetchDashboard, fetchDashboards, fetchStatus } from "./api";
+import { AlarmBanner } from "./components/AlarmBanner";
 import { DashboardGrid } from "./components/DashboardGrid";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
@@ -27,6 +28,7 @@ export default function App() {
   return (
     <div className="app">
       <StatusBar />
+      <AlarmBanner />
       <div className="app-body">
         {sidebarOpen && <Sidebar />}
         <main className="app-main">

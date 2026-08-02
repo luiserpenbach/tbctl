@@ -137,6 +137,10 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(404, str(e)) from e
         return {"window_s": window_s, "series": data}
 
+    @r.get("/events")
+    def events(limit: Annotated[int, Query(gt=0, le=500)] = 100) -> dict:
+        return {"events": ctx.events.tail(limit)}
+
     # -------------------------------------------------------- sequencer
 
     @r.get("/sequences")

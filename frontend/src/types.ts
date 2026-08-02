@@ -57,6 +57,13 @@ export interface EventMsg {
   [k: string]: unknown;
 }
 
+export interface EventRecord {
+  time: number;
+  iso?: string;
+  event: string;
+  [k: string]: unknown;
+}
+
 export type WsMsg = FrameMsg | SeqStatusMsg | EventMsg;
 
 export interface PanelConfig {

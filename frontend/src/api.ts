@@ -1,4 +1,4 @@
-import type { ChannelInfo, DashboardConfig, NodeStatus, RunMeta } from "./types";
+import type { ChannelInfo, DashboardConfig, EventRecord, NodeStatus, RunMeta } from "./types";
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -76,3 +76,5 @@ export const resetSequence = () => post("/api/sequences/reset");
 export const setManualValve = (tag: string, state: string) =>
   post("/api/manual/valve", { tag, state });
 export const setControlMode = (enabled: boolean) => post("/api/control-mode", { enabled });
+export const fetchEvents = (limit = 100) =>
+  get<{ events: EventRecord[] }>(`/api/events?limit=${limit}`);

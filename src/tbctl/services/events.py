@@ -30,6 +30,23 @@ class EventLog:
         self._sinks.append(sink)
         return lambda: self._sinks.remove(sink)
 
+    def tail(self, limit: int = 100) -> list[dict]:
+        """Most recent events (today's file, then yesterday's), newest first."""
+        out: list[dict] = []
+        for path in sorted(self._dir.glob("events-*.jsonl"), reverse=True)[:2]:
+            try:
+                lines = path.read_text().splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+                if len(out) >= limit:
+                    return out
+        return out
+
     def log(self, event: str, **payload) -> dict:
         record = {
             "time": time.time(),
