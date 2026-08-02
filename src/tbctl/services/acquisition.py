@@ -137,13 +137,19 @@ class AcquisitionService:
         iface: DeviceInterface,
         capacity_s: float = 600.0,
     ):
-        self._chmap = chmap
         self._iface = iface
         self._task: asyncio.Task | None = None
         self._stream_epoch = 0.0
         self._samples_in = 0
         self.dropped_scans = 0
+        self._capacity_s = capacity_s
+        # listeners get (group_name, t_epoch, eu_block) after every ingest;
+        # survive reconfigure() so the recorder hook stays attached
+        self._listeners: list[Callable[[str, np.ndarray, np.ndarray], None]] = []
+        self._configure(chmap, capacity_s)
 
+    def _configure(self, chmap: ChannelMap, capacity_s: float) -> None:
+        self._chmap = chmap
         inputs = chmap.inputs()
         self._scan_channels = inputs  # scan list order == channel order
         self._scan_names = [c.hw for c in inputs]
@@ -173,8 +179,14 @@ class AcquisitionService:
         self._cj_read_at = 0.0
         # latest raw volts per tag (for the raw channel viewer)
         self._latest_raw: dict[str, float] = {}
-        # listeners get (group_name, t_epoch, eu_block) after every ingest
-        self._listeners: list[Callable[[str, np.ndarray, np.ndarray], None]] = []
+
+    def reconfigure(self, chmap: ChannelMap) -> None:
+        """Apply a new channel map in place (must be stopped). Ring buffers
+        reset; the service object identity is preserved so every holder's
+        reference stays valid."""
+        if self.running:
+            raise RuntimeError("stop acquisition before reconfigure")
+        self._configure(chmap, self._capacity_s)
 
     def add_listener(self, fn: Callable[[str, np.ndarray, np.ndarray], None]) -> Callable[[], None]:
         self._listeners.append(fn)

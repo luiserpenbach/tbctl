@@ -12,6 +12,8 @@ export function StatusBar() {
   const setEditMode = useStore((s) => s.setEditMode);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const dashboard = useStore((s) => s.dashboard);
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
 
   const [connOpen, setConnOpen] = useState(false);
   // re-render each second for heartbeat-age evaluation
@@ -30,6 +32,18 @@ export function StatusBar() {
     <header className="statusbar">
       <button className="btn" onClick={toggleSidebar} title="toggle sidebar">☰</button>
       <span className="brand">TBCTL</span>
+      <button
+        className={`btn ${view === "dashboard" ? "active" : ""}`}
+        onClick={() => setView("dashboard")}
+      >
+        dash
+      </button>
+      <button
+        className={`btn ${view === "channels" ? "active" : ""}`}
+        onClick={() => setView("channels")}
+      >
+        channels
+      </button>
       <span className="chip">{dashboard?.name ?? "no dashboard"}</span>
       {status?.device.sim && <span className="chip warn"><span className="dot" />SIM</span>}
       <span className="spacer" />

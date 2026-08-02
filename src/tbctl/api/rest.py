@@ -389,6 +389,38 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(404, str(e)) from e
         return {"ok": True, "setpoints": ctx.iface.sim_setpoints()}
 
+    # ----------------------------------------------------- config editor
+
+    @r.get("/config/channels")
+    def config_channels_get() -> dict:
+        loaded = ctx.bundle.channels
+        return {
+            "config": loaded.model.model_dump(exclude_none=True),
+            "sha256": loaded.sha256,
+            "path": str(loaded.path),
+        }
+
+    @r.post("/config/channels")
+    async def config_channels_save(payload: dict) -> dict:
+        from pydantic import ValidationError
+
+        from tbctl.services.config_editor import apply_channels, validate_channels_payload
+
+        _switch_guard()
+        try:
+            chmap, errors = validate_channels_payload(ctx, payload)
+        except ValidationError as e:
+            raise HTTPException(
+                422,
+                [
+                    {"loc": ".".join(str(x) for x in err["loc"]), "msg": err["msg"]}
+                    for err in e.errors()
+                ],
+            ) from e
+        if errors:
+            raise HTTPException(422, [{"loc": "sequences", "msg": m} for m in errors])
+        return await apply_channels(ctx, chmap, payload)
+
     # -------------------------------------------------------- connection
 
     def _switch_guard() -> None:

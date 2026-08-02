@@ -354,6 +354,15 @@ button.btn.confirm {
 .event-row .event-time { color: var(--text-faint); flex-shrink: 0; }
 .event-row .event-text { overflow: hidden; text-overflow: ellipsis; }
 
+/* editor pages */
+.editor-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 860px;
+}
+.editor-head { display: flex; gap: 10px; align-items: center; }
+
 /* dashboard tabs */
 .dash-tabs {
   display: flex;

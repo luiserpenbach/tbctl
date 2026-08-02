@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { fetchChannels, fetchDashboard, fetchDashboards, fetchStatus } from "./api";
 import { AlarmBanner } from "./components/AlarmBanner";
+import { ChannelsEditor } from "./components/ChannelsEditor";
 import { DashboardGrid } from "./components/DashboardGrid";
 import { DashboardTabs } from "./components/DashboardTabs";
 import { Sidebar } from "./components/Sidebar";
@@ -10,6 +11,7 @@ import { connectWs } from "./ws";
 
 export default function App() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const view = useStore((s) => s.view);
 
   useEffect(() => {
     connectWs();
@@ -33,8 +35,13 @@ export default function App() {
       <div className="app-body">
         {sidebarOpen && <Sidebar />}
         <main className="app-main">
-          <DashboardTabs />
-          <DashboardGrid />
+          {view === "dashboard" && (
+            <>
+              <DashboardTabs />
+              <DashboardGrid />
+            </>
+          )}
+          {view === "channels" && <ChannelsEditor />}
         </main>
       </div>
     </div>

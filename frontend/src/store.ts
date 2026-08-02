@@ -24,7 +24,9 @@ interface TbctlStore {
   runs: RunMeta[];
   viewMode: ViewMode;
   events: EventRecord[];
+  view: "dashboard" | "channels" | "sequences";
 
+  setView: (v: "dashboard" | "channels" | "sequences") => void;
   pushEvent: (e: EventRecord) => void;
   setEvents: (e: EventRecord[]) => void;
   setRuns: (r: RunMeta[]) => void;
@@ -57,7 +59,9 @@ export const useStore = create<TbctlStore>((set) => ({
   runs: [],
   viewMode: { mode: "live" },
   events: [],
+  view: "dashboard",
 
+  setView: (view) => set({ view }),
   pushEvent: (e) => set((s) => ({ events: [e, ...s.events].slice(0, 200) })),
   setEvents: (events) => set({ events: events.slice(0, 200) }),
   setRuns: (runs) => set({ runs }),

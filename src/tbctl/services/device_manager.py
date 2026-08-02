@@ -120,6 +120,26 @@ class DeviceManager:
         self.last_error: str | None = None
         self.switched_at: float = time.time()
 
+    def update_chmap(self, chmap: ChannelMap) -> None:
+        """Adopt an edited channel map (used by the config editor)."""
+        self._chmap = chmap
+
+    def rebuild_sim_backend(self) -> None:
+        """Replace a mock backend so it reflects a new channel map.
+
+        Only meaningful in sim mode; caller must have stopped acquisition.
+        """
+        if not self.device.is_sim:
+            return
+        from tbctl.hw.ljm_mock import MockDevice
+
+        old = self.device.backend
+        new = MockDevice(self._chmap)
+        new.open()
+        self.device.backend = new
+        with contextlib.suppress(Exception):
+            old.close()
+
     def _build_backend(self, mode: Mode, ip: str | None):
         if mode == "sim":
             from tbctl.hw.ljm_mock import MockDevice
