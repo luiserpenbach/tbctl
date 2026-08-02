@@ -63,6 +63,17 @@ class DataBuffers {
     return vs && vs.length ? vs[vs.length - 1] : null;
   }
 
+  // stale-data guard (phase 15): a dead sensor must not look like a frozen
+  // live value. Compared against the freshest tag rather than wall clock so
+  // browser/node clock skew can't grey out everything.
+  isStale(tag: string, maxAgeS = 1.0): boolean {
+    const ts = this.t.get(tag);
+    if (!ts || ts.length === 0) return true;
+    const newest = this.latestTime();
+    if (newest === null) return true;
+    return newest - ts[ts.length - 1] > maxAgeS;
+  }
+
   latestTime(): number | null {
     let best: number | null = null;
     this.t.forEach((ts) => {

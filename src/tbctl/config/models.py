@@ -488,6 +488,7 @@ PanelType = Literal[
     "raw_table",
     "sim_panel",
     "pid",
+    "checklist_panel",
 ]
 
 

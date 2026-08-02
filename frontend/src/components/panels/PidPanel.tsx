@@ -78,6 +78,7 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
           valveKind={(tag) => (byTag.get(tag)?.kind === "spark" ? "spark" : "valve")}
           liveValve={liveValve}
           liveValue={(tag) => buffers.latest(tag)}
+          staleOf={(tag) => buffers.isStale(tag)}
           unitOf={(tag) => byTag.get(tag)?.unit ?? ""}
           onElementClick={clickValve}
         >

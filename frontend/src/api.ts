@@ -154,6 +154,29 @@ export const setControlMode = (enabled: boolean) => post("/api/control-mode", { 
 export const fetchEvents = (limit = 100) =>
   get<{ events: EventRecord[] }>(`/api/events?limit=${limit}`);
 
+// ----------------------------------------------------------- extras (ph. 15)
+
+export const postRunNote = (text: string) => post("/api/runs/note", { text });
+export const fetchRunEvents = (runId: string) =>
+  get<{ events: EventRecord[] }>(`/api/runs/${runId}/events`);
+export const runCsvUrl = (runId: string, tags: string[]) =>
+  `/api/runs/${runId}/export.csv?tags=${encodeURIComponent(tags.join(","))}`;
+
+export interface ChecklistState {
+  name: string;
+  items: string[];
+  checked: boolean[];
+}
+
+export const fetchChecklists = () =>
+  get<{ checklists: { name: string; items: string[] }[]; active: ChecklistState | null }>(
+    "/api/checklists",
+  );
+export const activateChecklist = (name: string | null) =>
+  post<{ active: ChecklistState | null }>("/api/checklists/activate", { name });
+export const checkChecklistItem = (index: number, checked: boolean) =>
+  post<{ active: ChecklistState | null }>("/api/checklists/check", { index, checked });
+
 // ------------------------------------------------------------- P&ID (ph. 13)
 
 export type PidElement =

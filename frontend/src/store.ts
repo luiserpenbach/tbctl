@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { trackSeqState } from "./alert";
 import type {
   ChannelInfo,
   DashboardConfig,
@@ -68,7 +69,10 @@ export const useStore = create<TbctlStore>((set) => ({
   setViewMode: (viewMode) => set({ viewMode }),
   setStatus: (status) => set({ status }),
   setChannels: (channels) => set({ channels }),
-  setSeqStatus: (seqStatus) => set({ seqStatus, lastSeqStatusAt: Date.now() }),
+  setSeqStatus: (seqStatus) => {
+    trackSeqState(seqStatus.state);
+    set({ seqStatus, lastSeqStatusAt: Date.now() });
+  },
   setWsConnected: (wsConnected) => set({ wsConnected }),
   setDashboard: (dashboard) => set({ dashboard }),
   setDashboards: (dashboards) => set({ dashboards }),

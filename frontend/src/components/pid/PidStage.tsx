@@ -70,6 +70,7 @@ export function PidStage({
   valveKind,
   liveValve,
   liveValue,
+  staleOf,
   unitOf,
   onElementClick,
   onElementDrag,
@@ -81,6 +82,7 @@ export function PidStage({
   valveKind: (channel: string) => "valve" | "spark";
   liveValve?: (channel: string) => boolean | null;
   liveValue?: (channel: string) => number | null;
+  staleOf?: (channel: string) => boolean;
   unitOf?: (channel: string) => string;
   onElementClick?: (el: PidElement) => void;
   onElementDrag?: (id: string, x: number, y: number) => void;
@@ -185,14 +187,16 @@ export function PidStage({
         }
         if (el.type === "sensor") {
           const v = liveValue ? liveValue(el.channel) : null;
+          const stale = staleOf ? staleOf(el.channel) : false;
           const warn =
+            !stale &&
             v !== null &&
             ((el.warn_min !== undefined && v < el.warn_min) ||
               (el.warn_max !== undefined && v > el.warn_max));
           return (
             <div
               {...common}
-              className={`pid-el pid-sensor ${warn ? "warn" : ""} ${selectedId === el.id ? "selected" : ""}`}
+              className={`pid-el pid-sensor ${warn ? "warn" : ""} ${stale ? "stale" : ""} ${selectedId === el.id ? "selected" : ""}`}
               title={el.channel}
               style={{ left: cx, top: cy }}
             >

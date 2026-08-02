@@ -459,6 +459,27 @@ button.btn.confirm {
   padding: 6px 10px;
 }
 
+/* phase 15 extras */
+tr.stale, .pid-sensor.stale { opacity: 0.35; }
+.pid-sensor.stale { border-style: dashed; }
+.checklist-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 3px 2px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.checklist-item.done span { color: var(--text-faint); text-decoration: line-through; }
+.csv-link {
+  color: var(--text-faint);
+  font-size: 10px;
+  text-decoration: none;
+  margin-left: 6px;
+}
+.csv-link:hover { color: var(--accent); }
+
 /* dashboard tabs */
 .dash-tabs {
   display: flex;

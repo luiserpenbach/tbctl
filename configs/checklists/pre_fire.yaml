@@ -1,0 +1,13 @@
+# Pre-fire procedural checklist (roadmap phase 15). Checking items logs
+# events; completion is shown next to ARM but never blocks anything.
+name: pre_fire
+items:
+  - Test cell clear, doors closed, warning light on
+  - Camera + DAQ recording armed
+  - N2 purge bottle open, regulator at 10 bar
+  - OX and fuel tank pressures nominal
+  - Vent valves confirmed OPEN (fail-safe state)
+  - Igniter continuity checked
+  - Sequence loaded and compile report reviewed
+  - Redlines reviewed for this test
+  - Abort button within reach

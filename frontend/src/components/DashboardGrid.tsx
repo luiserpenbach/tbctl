@@ -3,6 +3,7 @@ import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import { useStore } from "../store";
 import type { PanelConfig } from "../types";
 import { PanelModal } from "./PanelModal";
+import { ChecklistPanel } from "./panels/ChecklistPanel";
 import { PidPanel } from "./panels/PidPanel";
 import { RawTablePanel } from "./panels/RawTablePanel";
 import { RecorderPanel } from "./panels/RecorderPanel";
@@ -32,6 +33,8 @@ function PanelBody({ panel }: { panel: PanelConfig }) {
       return <SimPanel />;
     case "pid":
       return <PidPanel panel={panel} />;
+    case "checklist_panel":
+      return <ChecklistPanel />;
   }
 }
 

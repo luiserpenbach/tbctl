@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
-import { fetchLive, fetchRunData } from "../../api";
+import { fetchLive, fetchRunData, fetchRunEvents } from "../../api";
 import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
@@ -19,6 +19,33 @@ const PALETTE = [
 const SYNC_KEY = uPlot.sync("tbctl");
 const DEFAULT_WINDOW_S = 60;
 
+// run-review event markers (phase 15): what to draw and how
+interface Marker {
+  t: number;
+  letter: string;
+  color: string;
+  label: string;
+}
+
+function toMarker(e: { event: string; time: number; [k: string]: unknown }): Marker | null {
+  switch (e.event) {
+    case "note":
+      return { t: e.time, letter: "N", color: "#4cc9f0", label: String(e.text ?? "note") };
+    case "seq_fired":
+      return { t: e.time, letter: "F", color: "#2ecc71", label: `FIRE ${e.sequence ?? ""}` };
+    case "seq_abort_commanded":
+      return { t: e.time, letter: "A", color: "#e74c3c", label: "abort commanded" };
+    case "seq_terminal":
+      return e.state === "ABORTED" || e.state === "FAULT"
+        ? { t: e.time, letter: "A", color: "#e74c3c", label: `${e.state} ${e.error ?? ""}` }
+        : null;
+    case "redline_tripped":
+      return { t: e.time, letter: "R", color: "#f1c40f", label: String(e.reason ?? "redline") };
+    default:
+      return null;
+  }
+}
+
 export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const elRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
@@ -31,6 +58,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const viewMode = useStore((s) => s.viewMode);
   const tags = panel.channels;
   const isHistory = viewMode.mode === "run";
+  const markersRef = useRef<Marker[]>([]);
 
   // one-time backfill of the ring-buffer window (live mode)
   useEffect(() => {
@@ -95,6 +123,33 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             }
           },
         ],
+        draw: [
+          (u) => {
+            // event markers over the plot area (run review, phase 15)
+            if (!markersRef.current.length) return;
+            const { ctx } = u;
+            const top = u.bbox.top;
+            const bottom = u.bbox.top + u.bbox.height;
+            ctx.save();
+            ctx.font = `${10 * devicePixelRatio}px monospace`;
+            ctx.textAlign = "center";
+            for (const m of markersRef.current) {
+              const x = u.valToPos(m.t, "x", true);
+              if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+              ctx.strokeStyle = m.color;
+              ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
+              ctx.lineWidth = devicePixelRatio;
+              ctx.beginPath();
+              ctx.moveTo(x, top);
+              ctx.lineTo(x, bottom);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = m.color;
+              ctx.fillText(m.letter, x, top + 10 * devicePixelRatio);
+            }
+            ctx.restore();
+          },
+        ],
       },
     };
 
@@ -108,6 +163,15 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
 
     let off = () => {};
     if (isHistory && viewMode.mode === "run") {
+      markersRef.current = [];
+      fetchRunEvents(viewMode.run.run_id)
+        .then((r) => {
+          markersRef.current = r.events
+            .map(toMarker)
+            .filter((m): m is Marker => m !== null);
+          plot.redraw();
+        })
+        .catch(() => {});
       // historical: fetch the run's data once and frame the whole run
       fetchRunData(viewMode.run.run_id, tags, 4000)
         .then((r) => {
@@ -125,6 +189,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         })
         .catch(() => {});
     } else {
+      markersRef.current = [];
       off = onTick(() => {
         const data = buffers.aligned(tags);
         // apply series visibility

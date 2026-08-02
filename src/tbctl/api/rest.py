@@ -52,6 +52,19 @@ class PidAssetUpload(BaseModel):
     svg: str
 
 
+class RunNote(BaseModel):
+    text: str
+
+
+class ChecklistActivate(BaseModel):
+    name: str | None  # None = deactivate
+
+
+class ChecklistCheck(BaseModel):
+    index: int
+    checked: bool
+
+
 def build_router(ctx: NodeContext) -> APIRouter:
     r = APIRouter(prefix="/api")
 
@@ -106,6 +119,15 @@ def build_router(ctx: NodeContext) -> APIRouter:
                 "t_start": ctx.recorder.active.t_start if ctx.recorder.active else None,
             },
             "control_enabled": ctx.control_enabled,
+            "checklist": (
+                {
+                    "name": ctx.checklist["name"],
+                    "total": len(ctx.checklist["items"]),
+                    "checked": sum(ctx.checklist["checked"]),
+                }
+                if ctx.checklist
+                else None
+            ),
             "outputs": valve_states,
             "config": {
                 "channels_sha256": ctx.bundle.channels.sha256,
@@ -374,6 +396,17 @@ def build_router(ctx: NodeContext) -> APIRouter:
         ctx.events.log("run_stopped", run_id=run.run_id, sample_counts=run.sample_counts)
         return run.to_dict()
 
+    @r.post("/runs/note")
+    def runs_note(body: RunNote) -> dict:
+        """Timestamped bookmark during a run -> JSONL + the run's HDF5."""
+        if ctx.recorder.active is None:
+            raise HTTPException(409, "no active run")
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "empty note")
+        ctx.events.log("note", text=text[:500], run_id=ctx.recorder.active.run_id)
+        return {"ok": True}
+
     @r.get("/runs")
     def runs_list() -> dict:
         return {"runs": ctx.recorder.list_runs()}
@@ -384,6 +417,49 @@ def build_router(ctx: NodeContext) -> APIRouter:
             return ctx.recorder.run_meta(run_id)
         except KeyError as e:
             raise HTTPException(404, str(e)) from e
+
+    @r.get("/runs/{run_id}/events")
+    def run_events(run_id: str) -> dict:
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            return {"events": ctx.recorder.run_events(run_id)}
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @r.get("/runs/{run_id}/export.csv")
+    def run_export_csv(
+        run_id: str,
+        tags: str,
+        t0: float | None = None,
+        t1: float | None = None,
+    ):
+        from fastapi.responses import StreamingResponse
+
+        from tbctl.services.recorder import RecorderError
+
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if not tag_list:
+            raise HTTPException(400, "no tags given")
+        try:
+            rows = ctx.recorder.export_csv_rows(run_id, tag_list, t0, t1)
+            first = next(rows)  # touch the generator so 404s happen before streaming
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+
+        def stream():
+            yield first
+            yield from rows
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.csv"'},
+        )
 
     @r.get("/runs/{run_id}/data")
     def run_data(
@@ -495,6 +571,64 @@ def build_router(ctx: NodeContext) -> APIRouter:
         if errors:
             raise HTTPException(422, [{"loc": "sequences", "msg": m} for m in errors])
         return await apply_channels(ctx, chmap, payload)
+
+    # ------------------------------------------------ checklists (phase 15)
+
+    def _read_checklists() -> dict[str, list[str]]:
+        import yaml
+
+        out: dict[str, list[str]] = {}
+        d = ctx.config_dir / "checklists"
+        if not d.is_dir():
+            return out
+        for path in sorted(d.glob("*.yaml")):
+            try:
+                data = yaml.safe_load(path.read_text())
+                name = str(data["name"])
+                items = [str(x) for x in data["items"]]
+                if name and items:
+                    out[name] = items
+            except Exception:
+                continue  # malformed checklist files are skipped, not fatal
+        return out
+
+    @r.get("/checklists")
+    def checklists() -> dict:
+        return {
+            "checklists": [{"name": n, "items": i} for n, i in _read_checklists().items()],
+            "active": ctx.checklist,
+        }
+
+    @r.post("/checklists/activate")
+    def checklist_activate(body: ChecklistActivate) -> dict:
+        if body.name is None:
+            ctx.checklist = None
+            ctx.events.log("checklist_deactivated")
+            return {"active": None}
+        all_lists = _read_checklists()
+        if body.name not in all_lists:
+            raise HTTPException(404, f"unknown checklist {body.name!r}")
+        items = all_lists[body.name]
+        ctx.checklist = {"name": body.name, "items": items, "checked": [False] * len(items)}
+        ctx.events.log("checklist_activated", checklist=body.name, items=len(items))
+        return {"active": ctx.checklist}
+
+    @r.post("/checklists/check")
+    def checklist_check(body: ChecklistCheck) -> dict:
+        if ctx.checklist is None:
+            raise HTTPException(409, "no active checklist")
+        if not 0 <= body.index < len(ctx.checklist["items"]):
+            raise HTTPException(400, "bad item index")
+        ctx.checklist["checked"][body.index] = body.checked
+        done = sum(ctx.checklist["checked"])
+        ctx.events.log(
+            "checklist_item",
+            checklist=ctx.checklist["name"],
+            item=ctx.checklist["items"][body.index],
+            checked=body.checked,
+            progress=f"{done}/{len(ctx.checklist['items'])}",
+        )
+        return {"active": ctx.checklist}
 
     # ---------------------------------------------------- P&ID (phase 13)
 

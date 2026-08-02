@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchRuns } from "../api";
+import { fetchRuns, runCsvUrl } from "../api";
 import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
 import { EventFeed } from "./EventFeed";
@@ -72,6 +72,20 @@ export function Sidebar() {
               onClick={() => setViewMode({ mode: "run", run: r })}
             >
               <span style={{ color: active ? "var(--accent)" : undefined }}>{r.run_id}</span>
+              <a
+                className="csv-link"
+                title="download CSV (all input channels)"
+                href={runCsvUrl(
+                  r.run_id,
+                  channels
+                    .filter((c) => c.kind === "analog_in" || c.kind === "thermocouple_k")
+                    .map((c) => c.tag),
+                )}
+                download
+                onClick={(e) => e.stopPropagation()}
+              >
+                csv⬇
+              </a>
             </div>
           );
         })}

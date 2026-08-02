@@ -237,6 +237,61 @@ class Recorder:
             raise RecorderError("run is still recording")
         return path
 
+    def run_events(self, run_id: str) -> list[dict]:
+        """Events mirrored into the run file (notes, seq_*, redline_tripped...)."""
+        path = self._run_path(run_id)
+        with h5py.File(path, "r") as f:
+            if "events" not in f:
+                return []
+            return [json.loads(s) for s in f["events"].asstr()[:]]
+
+    def export_csv_rows(
+        self,
+        run_id: str,
+        tags: list[str],
+        t0: float | None = None,
+        t1: float | None = None,
+    ):
+        """Yield CSV lines: wide table on the union of the tags' timebases
+        (cells blank where a slower rate group has no sample). Full
+        resolution — no decimation."""
+        path = self._run_path(run_id)
+        series: list[tuple[np.ndarray, np.ndarray]] = []
+        with h5py.File(path, "r") as f:
+            for tag in tags:
+                for group in f["groups"]:
+                    g_tags = list(f["groups"][group].attrs["tags"])
+                    if tag in g_tags:
+                        col = g_tags.index(tag)
+                        t = f["groups"][group]["t"][:]
+                        lo = int(np.searchsorted(t, t0, "left")) if t0 is not None else 0
+                        hi = int(np.searchsorted(t, t1, "right")) if t1 is not None else len(t)
+                        series.append((t[lo:hi], f["groups"][group]["data"][lo:hi, col]))
+                        break
+                else:
+                    raise KeyError(f"tag {tag!r} not in run {run_id!r}")
+
+        all_t = (
+            np.unique(np.concatenate([t for t, _ in series])) if series else np.empty(0, dtype="f8")
+        )
+        # per-tag positions where its timestamps land in the union timeline
+        cols: list[tuple[np.ndarray, np.ndarray]] = [
+            (np.searchsorted(all_t, t), v) for t, v in series
+        ]
+        yield "t_epoch," + ",".join(tags) + "\n"
+        cells = np.full((len(all_t), len(tags)), "", dtype=object)
+        for j, (idx, v) in enumerate(cols):
+            for k in range(len(idx)):
+                cells[idx[k], j] = repr(float(v[k]))
+        chunk: list[str] = []
+        for i in range(len(all_t)):
+            chunk.append(f"{all_t[i]:.6f}," + ",".join(cells[i]) + "\n")
+            if len(chunk) >= 2000:
+                yield "".join(chunk)
+                chunk = []
+        if chunk:
+            yield "".join(chunk)
+
     def run_data(
         self,
         run_id: str,

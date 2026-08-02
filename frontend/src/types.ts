@@ -25,6 +25,7 @@ export interface NodeStatus {
   acquisition: { running: boolean; scan_rate_hz: number; sample_count: number };
   recording: { active: boolean; run_id: string | null; t_start: number | null };
   control_enabled: boolean;
+  checklist: { name: string; total: number; checked: number } | null;
   outputs: Record<string, string>;
   config: Record<string, unknown>;
 }
@@ -76,7 +77,8 @@ export interface PanelConfig {
     | "recorder_panel"
     | "raw_table"
     | "sim_panel"
-    | "pid";
+    | "pid"
+    | "checklist_panel";
   x: number;
   y: number;
   w: number;

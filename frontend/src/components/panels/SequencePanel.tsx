@@ -93,6 +93,15 @@ export function SequencePanel() {
         <button className="btn" onClick={doLoad} disabled={!selected || state === "RUNNING"}>
           LOAD
         </button>
+        {status?.checklist && (
+          <span
+            className={`chip ${status.checklist.checked === status.checklist.total ? "ok" : "warn"}`}
+            title={`checklist ${status.checklist.name}`}
+          >
+            <span className="dot" />
+            ✓ {status.checklist.checked}/{status.checklist.total}
+          </span>
+        )}
         {pending !== "arm" ? (
           <button
             className="btn"

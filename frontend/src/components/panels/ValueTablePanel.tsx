@@ -25,8 +25,9 @@ export function ValueTablePanel({ panel }: { panel: PanelConfig }) {
         <tbody>
           {tags.map((c) => {
             const v = buffers.latest(c.tag);
+            const stale = buffers.isStale(c.tag);
             return (
-              <tr key={c.tag}>
+              <tr key={c.tag} className={stale ? "stale" : ""} title={stale ? "no fresh data" : ""}>
                 <td>{c.tag}</td>
                 <td className="val">{v === null ? "—" : v.toFixed(2)}</td>
                 <td className="unit">{c.unit}</td>

@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { fetchRuns, startRun, stopRun } from "../../api";
+import { fetchRuns, postRunNote, startRun, stopRun } from "../../api";
 import { useStore } from "../../store";
 
 export function RecorderPanel() {
@@ -11,6 +11,8 @@ export function RecorderPanel() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [, setClock] = useState(0);
+  const [note, setNote] = useState("");
+  const [noteMsg, setNoteMsg] = useState("");
 
   useEffect(() => {
     const iv = setInterval(() => setClock(Date.now()), 1000);
@@ -46,6 +48,17 @@ export function RecorderPanel() {
     }
   };
 
+  const addNote = () => {
+    const text = note.trim();
+    if (!text) return;
+    postRunNote(text)
+      .then(() => {
+        setNote("");
+        setNoteMsg(`noted @ ${new Date().toISOString().slice(11, 19)}: ${text.slice(0, 40)}`);
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
   const inputStyle: CSSProperties = {
     background: "var(--bg)",
     border: "1px solid var(--border)",
@@ -66,6 +79,19 @@ export function RecorderPanel() {
           <div style={{ fontFamily: "var(--mono)", fontSize: 22 }}>
             {new Date(elapsed * 1000).toISOString().slice(11, 19)}
           </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <input
+              style={inputStyle}
+              placeholder="note / bookmark…"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addNote()}
+            />
+            <button className="btn" disabled={!note.trim()} onClick={addNote}>
+              + note
+            </button>
+          </div>
+          {noteMsg && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{noteMsg}</div>}
           <button className="btn" onClick={doStop} disabled={busy} style={{ marginTop: "auto" }}>
             ■ stop run
           </button>

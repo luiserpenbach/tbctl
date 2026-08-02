@@ -56,6 +56,8 @@ class NodeContext:
     config_dir: Path
     control_enabled: bool = False
     data_dir: Path = field(default_factory=lambda: Path("data/runs"))
+    # active pre-test checklist: {"name": str, "items": [str], "checked": [bool]}
+    checklist: dict | None = None
 
 
 def build_context(
