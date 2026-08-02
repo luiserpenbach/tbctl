@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchStatus, saveDashboard, setControlMode } from "../api";
 import { useStore } from "../store";
+import { ConnectionModal } from "./ConnectionModal";
 
 export function StatusBar() {
   const status = useStore((s) => s.status);
@@ -12,6 +13,7 @@ export function StatusBar() {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const dashboard = useStore((s) => s.dashboard);
 
+  const [connOpen, setConnOpen] = useState(false);
   // re-render each second for heartbeat-age evaluation
   const [, setNow] = useState(0);
   useEffect(() => {
@@ -31,9 +33,16 @@ export function StatusBar() {
       <span className="chip">{dashboard?.name ?? "no dashboard"}</span>
       {status?.device.sim && <span className="chip warn"><span className="dot" />SIM</span>}
       <span className="spacer" />
-      <span className={`chip ${deviceOk ? "ok" : "bad"}`}>
-        <span className="dot" />T7 {status?.device.ip ?? "—"}
+      <span
+        className={`chip ${deviceOk ? "ok" : "bad"}`}
+        style={{ cursor: "pointer" }}
+        title="connection settings"
+        onClick={() => setConnOpen(true)}
+      >
+        <span className="dot" />
+        {(status?.device.mode ?? "T7").toUpperCase()} {status?.device.mode === "ethernet" ? status?.device.ip : ""}
       </span>
+      {connOpen && <ConnectionModal onClose={() => setConnOpen(false)} />}
       <span className={`chip ${hbFresh ? "ok" : "bad"}`}>
         <span className="dot" />{wsConnected ? "LINK" : "NO LINK"}
       </span>

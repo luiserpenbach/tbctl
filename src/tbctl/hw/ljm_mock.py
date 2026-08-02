@@ -323,6 +323,8 @@ class MockDevice:
         # apply hardware fail-safe image at power-on
         self.apply_dio_masked(chmap.safe_word(), chmap.dio_inhibit())
         self._regs["TEMPERATURE_DEVICE_K"] = 298.15
+        self._regs["SERIAL_NUMBER"] = 470000001.0  # sim identity
+        self._regs["FIRMWARE_VERSION"] = 1.0332
 
     # ------------------------------------------------------------------ sim
     def sim_set(self, tag: str, value_eu: float, noise_sigma_eu: float | None = None) -> None:

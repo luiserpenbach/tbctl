@@ -51,6 +51,7 @@ class NodeContext:
     recorder: Recorder
     sequencer: SequencerService
     manual: ManualControl
+    device_mgr: object  # DeviceManager
     sim: bool
     config_dir: Path
     control_enabled: bool = False
@@ -63,17 +64,22 @@ def build_context(
     data_dir: Path | None = None,
     log_dir: Path | None = None,
 ) -> NodeContext:
+    from tbctl.services.device_manager import DeviceManager, SwitchableDevice
+
     bundle = load_config_dir(config_dir)
     chmap = bundle.channels.model
     if sim:
         from tbctl.hw.ljm_mock import MockDevice
 
-        iface = MockDevice(chmap)
+        backend = MockDevice(chmap)
+        mode = "sim"
     else:
         from tbctl.hw.ljm_iface import LjmDevice
 
         conn, ident = chmap.device.ljm_open_args()
-        iface = LjmDevice(ident, conn)
+        backend = LjmDevice(ident, conn)
+        mode = "usb" if chmap.device.connection == "usb" else "ethernet"
+    iface = SwitchableDevice(backend)
     acq = AcquisitionService(chmap, iface)
     data_dir = data_dir or Path("data/runs")
     events = EventLog(log_dir or Path("logs"))
@@ -81,7 +87,9 @@ def build_context(
     events.add_sink(recorder.on_event)
     sequencer = SequencerService(bundle, iface, acq, events)
     manual = ManualControl(chmap, iface, events)
+    device_mgr = DeviceManager(chmap, iface, acq, events, mode)
     return NodeContext(
+        device_mgr=device_mgr,
         bundle=bundle,
         iface=iface,
         acq=acq,

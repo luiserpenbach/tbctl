@@ -14,7 +14,7 @@ export interface ChannelInfo {
 
 export interface NodeStatus {
   time: number;
-  device: { connected: boolean; ip: string; sim: boolean };
+  device: { connected: boolean; ip: string; sim: boolean; mode: "sim" | "usb" | "ethernet" };
   sequencer: {
     state: string;
     error: string;

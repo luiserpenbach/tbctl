@@ -4,8 +4,9 @@ WebSocket (D6)."""
 
 from __future__ import annotations
 
+import re
 import time
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -41,6 +42,11 @@ class ControlMode(BaseModel):
     enabled: bool
 
 
+class ConnectionSwitch(BaseModel):
+    mode: Literal["sim", "usb", "ethernet"]
+    ip: str | None = None
+
+
 def build_router(ctx: NodeContext) -> APIRouter:
     r = APIRouter(prefix="/api")
 
@@ -73,7 +79,8 @@ def build_router(ctx: NodeContext) -> APIRouter:
             "device": {
                 "connected": ctx.iface.connected,
                 "ip": chmap.device.ip,
-                "sim": ctx.sim,
+                "sim": ctx.iface.is_sim,
+                "mode": ctx.device_mgr.mode,
             },
             "sequencer": {
                 "state": SeqState(int(regs[0])).name,
@@ -345,14 +352,73 @@ def build_router(ctx: NodeContext) -> APIRouter:
         ctx.events.log("dashboard_saved", name=name)
         return {"ok": True, "path": str(path)}
 
-    if ctx.sim:
+    @r.post("/sim/set")
+    def sim_set(body: SimSet) -> dict:
+        if not ctx.iface.is_sim:
+            raise HTTPException(409, "not in simulator mode")
+        try:
+            ctx.iface.sim_set(body.tag, body.value, body.noise_sigma)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        return {"ok": True, "setpoints": ctx.iface.sim_setpoints()}
 
-        @r.post("/sim/set")
-        def sim_set(body: SimSet) -> dict:
+    # -------------------------------------------------------- connection
+
+    def _switch_guard() -> None:
+        st = ctx.sequencer.state()
+        if st != SeqState.IDLE:
+            raise HTTPException(409, f"sequencer is {st.name}; must be IDLE")
+        if ctx.recorder.active:
+            raise HTTPException(409, "recording in progress")
+        if ctx.control_enabled:
+            raise HTTPException(409, "disable control mode first")
+
+    @r.get("/connection")
+    def connection() -> dict:
+        return ctx.device_mgr.info()
+
+    @r.post("/connection")
+    async def connection_switch(body: ConnectionSwitch) -> dict:
+        _switch_guard()
+        try:
+            await ctx.device_mgr.switch(body.mode, body.ip)
+        except Exception as e:
+            raise HTTPException(502, f"switch failed (previous connection restored): {e}") from e
+        ctx.sim = ctx.iface.is_sim
+        return ctx.device_mgr.info()
+
+    @r.post("/connection/deploy-lua")
+    async def connection_deploy() -> dict:
+        import asyncio
+
+        from tbctl.hw.script_loader import ScriptLoadError, deploy_script, read_debug
+        from tbctl.hw.watchdog import configure_watchdog
+
+        if ctx.iface.is_sim:
+            raise HTTPException(409, "deploy not applicable in simulator mode")
+        _switch_guard()
+        try:
+            version = await asyncio.to_thread(deploy_script, ctx.iface)
+            await asyncio.to_thread(configure_watchdog, ctx.iface, ctx.bundle.channels.model)
+        except ScriptLoadError as e:
+            debug = ""
             try:
-                ctx.iface.sim_set(body.tag, body.value, body.noise_sigma)
-            except KeyError as e:
-                raise HTTPException(404, str(e)) from e
-            return {"ok": True, "setpoints": ctx.iface.sim_setpoints()}
+                debug = await asyncio.to_thread(read_debug, ctx.iface)
+            except Exception:
+                pass
+            raise HTTPException(502, f"deploy failed: {e}\nLUA_DEBUG: {debug}") from e
+        ctx.events.log("lua_deployed", interp_version=version)
+        return {"ok": True, "interp_version": version}
+
+    @r.get("/connection/read")
+    def connection_read(name: str) -> dict:
+        """One-shot register peek by LJM name (wiring checkout)."""
+        if not re.match(r"^[A-Za-z0-9_#]+$", name):
+            raise HTTPException(400, "bad register name")
+        try:
+            value = ctx.iface.read_name(name)
+        except Exception as e:
+            raise HTTPException(400, f"read failed: {e}") from e
+        return {"name": name, "value": value}
 
     return r
