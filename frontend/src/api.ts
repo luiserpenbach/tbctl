@@ -45,6 +45,13 @@ export const stopRun = () => post<RunMeta>("/api/runs/stop");
 export const saveDashboard = (name: string, body: DashboardConfig) =>
   post<{ ok: boolean; path: string }>(`/api/dashboards/${name}`, body);
 
+export interface RedlineInfo {
+  tag: string;
+  min: number | null;
+  max: number | null;
+  persist_ms: number;
+}
+
 export interface SequenceInfo {
   name: string;
   description: string;
@@ -52,6 +59,7 @@ export interface SequenceInfo {
   n_abort_steps: number;
   max_duration_s: number;
   allow_unsafe_end: boolean;
+  redlines: RedlineInfo[];
   sha256: string;
   loaded: boolean;
 }
@@ -65,6 +73,7 @@ export interface CompileReport {
   crc16: number;
   crc_match: boolean;
   warnings: string[];
+  redlines: RedlineInfo[];
 }
 
 export const fetchSequences = () => get<{ sequences: SequenceInfo[] }>("/api/sequences");

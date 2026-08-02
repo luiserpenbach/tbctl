@@ -134,6 +134,13 @@ export function SequencePanel() {
             {report.n_steps} steps / {(report.duration_ms / 1000).toFixed(2)} s
           </span>
           <span className="chip">abort {report.n_abort_steps} steps</span>
+          {report.redlines.map((r) => (
+            <span key={r.tag} className="chip" title={`persist ${r.persist_ms} ms`}>
+              RL {r.tag}
+              {r.min !== null ? ` ≥${r.min}` : ""}
+              {r.max !== null ? ` ≤${r.max}` : ""}
+            </span>
+          ))}
           {report.warnings.map((w, i) => (
             <span key={i} className="chip warn">
               <span className="dot" />

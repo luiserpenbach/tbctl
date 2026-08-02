@@ -225,9 +225,14 @@ def test_precondition_needs_bound():
         seq([{"t": 0.0, "set": {"a.b": "open"}}], preconditions=[{"tag": "pressure.x"}])
 
 
-def test_redlines_key_reserved():
-    s = seq([{"t": 0.0, "set": {"a.b": "open"}}], redlines=[{"whatever": 1}])
-    assert s.redlines == [{"whatever": 1}]
+def test_redlines_typed():
+    s = seq(
+        [{"t": 0.0, "set": {"a.b": "open"}}],
+        redlines=[{"tag": "pressure.chamber", "max": 22.0}],
+    )
+    assert s.redlines[0].max == 22.0 and s.redlines[0].persist_ms == 50
+    with pytest.raises(ValidationError):
+        seq([{"t": 0.0, "set": {"a.b": "open"}}], redlines=[{"whatever": 1}])
 
 
 def test_cross_validation():

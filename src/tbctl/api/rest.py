@@ -81,6 +81,7 @@ def build_router(ctx: NodeContext) -> APIRouter:
                 "cur_step": int(regs[2]),
                 "elapsed_ms": int(regs[3]),
                 "interp_version": int(regs[4]),
+                "redlines_armed": ctx.sequencer.redlines.armed,
             },
             "acquisition": {
                 "running": ctx.acq.running,
@@ -155,6 +156,10 @@ def build_router(ctx: NodeContext) -> APIRouter:
                     "n_abort_steps": len(s.model.abort),
                     "max_duration_s": s.model.max_duration_s,
                     "allow_unsafe_end": s.model.allow_unsafe_end,
+                    "redlines": [
+                        {"tag": r.tag, "min": r.min, "max": r.max, "persist_ms": r.persist_ms}
+                        for r in s.model.redlines
+                    ],
                     "sha256": s.sha256,
                     "loaded": ctx.sequencer.loaded is not None
                     and ctx.sequencer.loaded.name == name,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -298,6 +298,27 @@ class SeqStep(StrictModel):
     set: dict[str, StepValue] = Field(min_length=1)
 
 
+class Redline(StrictModel):
+    """Host-side auto-abort limit, evaluated from the live ring buffer while
+    the sequence is ARMED or RUNNING. A violation must persist for
+    `persist_ms` before tripping (debounces sensor noise). Redlines are a
+    monitoring layer on top of the Lua safety chain — the abort they trigger
+    takes the same always-accepted fastest path as the operator button."""
+
+    tag: str
+    min: float | None = None
+    max: float | None = None
+    persist_ms: int = Field(default=50, ge=0, le=5000)
+
+    @model_validator(mode="after")
+    def _bounds(self) -> Redline:
+        if self.min is None and self.max is None:
+            raise ValueError("redline needs min and/or max")
+        if self.min is not None and self.max is not None and self.min >= self.max:
+            raise ValueError("redline min must be < max")
+        return self
+
+
 def _check_steps(steps: list[SeqStep], what: str, max_duration_s: float | None) -> None:
     if len(steps) > MAX_STEPS:
         raise ValueError(f"{what}: {len(steps)} steps exceeds max {MAX_STEPS}")
@@ -323,8 +344,7 @@ class Sequence(StrictModel):
     steps: list[SeqStep] = Field(min_length=1)
     abort: list[SeqStep] = Field(min_length=1)
     allow_unsafe_end: bool = False
-    # Reserved for future redline watchers (§2) — accepted, never interpreted.
-    redlines: Any = None
+    redlines: list[Redline] = []
 
     @field_validator("name")
     @classmethod
@@ -363,6 +383,9 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
     for i, pre in enumerate(seq.preconditions):
         if pre.tag not in input_tags:
             errors.append(f"preconditions[{i}]: {pre.tag!r} is not an input channel")
+    for i, rl in enumerate(seq.redlines):
+        if rl.tag not in input_tags:
+            errors.append(f"redlines[{i}]: {rl.tag!r} is not an input channel")
     return errors
 
 

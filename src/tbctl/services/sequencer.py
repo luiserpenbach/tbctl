@@ -66,6 +66,14 @@ class SequencerService:
         self._heartbeat = HeartbeatPublisher(iface)
         self.loaded: LoadedSequence | None = None
 
+        from tbctl.services.redlines import RedlineWatcher
+
+        async def _redline_abort(reason: str) -> None:
+            log.error("aborting sequence: %s", reason)
+            await self.abort()
+
+        self.redlines = RedlineWatcher(acq, events, _redline_abort)
+
     # -- register helpers --------------------------------------------------
 
     def _read(self, logical: str) -> int:
@@ -161,6 +169,10 @@ class SequencerService:
         report = compiled.report()
         report["crc_match"] = True
         report["sha256"] = loaded_file.sha256
+        report["redlines"] = [
+            {"tag": r.tag, "min": r.min, "max": r.max, "persist_ms": r.persist_ms}
+            for r in loaded_file.model.redlines
+        ]
         return report
 
     def check_preconditions(self) -> list[str]:
@@ -200,6 +212,7 @@ class SequencerService:
             self._write("ARM_CODE", ARM_MAGIC)
             self._write("CMD", Cmd.ARM)
 
+        seq_model = self._bundle.sequences[self.loaded.name].model
         self._heartbeat.start()
         try:
             await asyncio.to_thread(_arm)
@@ -207,7 +220,8 @@ class SequencerService:
         except Exception:
             await self._heartbeat.stop()
             raise
-        self._events.log("seq_armed", sequence=self.loaded.name)
+        self.redlines.arm(seq_model.redlines)
+        self._events.log("seq_armed", sequence=self.loaded.name, redlines=len(seq_model.redlines))
 
     async def fire(self, confirm: str) -> None:
         if self.loaded is None:
@@ -231,6 +245,7 @@ class SequencerService:
         if st in (SeqState.RUNNING, SeqState.ABORTING):
             raise SequencerError(f"cannot reset while {st.name}")
         await self._heartbeat.stop()
+        self.redlines.disarm()
         if st != SeqState.IDLE:
             await asyncio.to_thread(self._write, "CMD", Cmd.RESET)
             await self._await_state(SeqState.IDLE)
@@ -245,8 +260,10 @@ class SequencerService:
             st = await asyncio.to_thread(self.state)
             if st in (SeqState.DONE, SeqState.ABORTED, SeqState.FAULT, SeqState.IDLE):
                 await self._heartbeat.stop()
+                self.redlines.disarm()
                 if st in (SeqState.ABORTED, SeqState.FAULT):
                     self._events.log("seq_terminal", state=st.name, error=self.error().name)
 
     async def shutdown(self) -> None:
         await self._heartbeat.stop()
+        self.redlines.disarm()
