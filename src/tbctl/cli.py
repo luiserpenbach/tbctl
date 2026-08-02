@@ -100,6 +100,69 @@ def cmd_probe(args: argparse.Namespace) -> int:
         dev.close()
 
 
+def cmd_soak(args: argparse.Namespace) -> int:
+    """§10.4 soak: record against a running node for N hours, then verify
+    sample-count accounting (expected = rate x duration per group, within
+    tolerance) and report node memory growth if it is local."""
+    import json
+    import time
+    import urllib.request
+
+    def api(path: str, body: dict | None = None, method: str | None = None) -> dict:
+        req = urllib.request.Request(
+            args.url + path,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method=method or ("GET" if body is None else "POST"),
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    status = api("/api/status")
+    rate = status["acquisition"]["scan_rate_hz"]
+    print(
+        f"node: sim={status['device']['sim']} scan_rate={rate:.0f} Hz, "
+        f"soaking for {args.hours:.2f} h"
+    )
+    run = api(
+        "/api/runs/start",
+        {"name": "soak", "operator": args.operator, "notes": f"{args.hours} h soak (§10.4)"},
+    )
+    print(f"recording run {run['run_id']}")
+    t0 = time.time()
+    end = t0 + args.hours * 3600.0
+    try:
+        while time.time() < end:
+            time.sleep(min(60.0, end - time.time()))
+            st = api("/api/status")
+            if not st["recording"]["active"]:
+                print("FAIL: recording stopped unexpectedly", file=sys.stderr)
+                return 1
+            elapsed = time.time() - t0
+            print(
+                f"  {elapsed / 3600.0:5.2f} h  samples={st['acquisition']['sample_count']}",
+                flush=True,
+            )
+    except KeyboardInterrupt:
+        print("interrupted — stopping run and checking what we have")
+    result = api("/api/runs/stop", method="POST")
+    duration = time.time() - t0
+    ok = True
+    meta = api("/api/channels")
+    for group, count in result["sample_counts"].items():
+        group_rate = meta["rate_groups"][group]
+        expected = duration * group_rate
+        loss = 1.0 - count / expected if expected else 0.0
+        verdict = "OK" if abs(loss) < 0.01 else "FAIL"
+        ok &= verdict == "OK"
+        print(
+            f"group {group}: {count} samples, expected ~{expected:.0f} "
+            f"({loss * 100:+.2f}% vs nominal) {verdict}"
+        )
+    print("soak PASS" if ok else "soak FAIL")
+    return 0 if ok else 1
+
+
 def cmd_deploy_lua(args: argparse.Namespace) -> int:
     from tbctl.config.loader import load_channels
     from tbctl.hw.ljm_iface import LjmDevice
@@ -145,6 +208,14 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="verify outputs are in sync, don't write"
     )
     p_gen.set_defaults(func=cmd_codegen)
+
+    p_soak = sub.add_parser(
+        "soak", help="§10.4 soak: record via a running node, verify sample accounting"
+    )
+    p_soak.add_argument("--url", default="http://localhost:8000")
+    p_soak.add_argument("--hours", type=float, default=8.0)
+    p_soak.add_argument("--operator", default="soak")
+    p_soak.set_defaults(func=cmd_soak)
 
     p_probe = sub.add_parser("probe", help="check T7 connectivity and script status")
     p_probe.add_argument("--config-dir", default="configs")

@@ -1,0 +1,110 @@
+# §10.3 hardware-acceptance pattern: 100 steps, irregular 2-200 ms spacing.
+# Logic analyzer on FIO4 (valve.purge) and FIO5 (valve.ox_pre); every edge
+# must land within 3 ms of nominal. Generated deterministically — do not
+# hand-edit step times.
+name: timing_test
+description: 100-step DIO timing pattern for step-time error / jitter measurement
+max_duration_s: 10.0
+steps:
+  - {t: 0.002, set: {valve.purge: open}}
+  - {t: 0.005, set: {valve.ox_pre: open}}
+  - {t: 0.010, set: {valve.purge: close}}
+  - {t: 0.018, set: {valve.ox_pre: close}}
+  - {t: 0.028, set: {valve.purge: open}}
+  - {t: 0.043, set: {valve.ox_pre: open}}
+  - {t: 0.063, set: {valve.purge: close}}
+  - {t: 0.093, set: {valve.ox_pre: close}}
+  - {t: 0.143, set: {valve.purge: open}}
+  - {t: 0.243, set: {valve.ox_pre: open}}
+  - {t: 0.443, set: {valve.purge: close}}
+  - {t: 0.445, set: {valve.ox_pre: close}}
+  - {t: 0.448, set: {valve.purge: open}}
+  - {t: 0.453, set: {valve.ox_pre: open}}
+  - {t: 0.461, set: {valve.purge: close}}
+  - {t: 0.471, set: {valve.ox_pre: close}}
+  - {t: 0.486, set: {valve.purge: open}}
+  - {t: 0.506, set: {valve.ox_pre: open}}
+  - {t: 0.536, set: {valve.purge: close}}
+  - {t: 0.586, set: {valve.ox_pre: close}}
+  - {t: 0.686, set: {valve.purge: open}}
+  - {t: 0.886, set: {valve.ox_pre: open}}
+  - {t: 0.888, set: {valve.purge: close}}
+  - {t: 0.891, set: {valve.ox_pre: close}}
+  - {t: 0.896, set: {valve.purge: open}}
+  - {t: 0.904, set: {valve.ox_pre: open}}
+  - {t: 0.914, set: {valve.purge: close}}
+  - {t: 0.929, set: {valve.ox_pre: close}}
+  - {t: 0.949, set: {valve.purge: open}}
+  - {t: 0.979, set: {valve.ox_pre: open}}
+  - {t: 1.029, set: {valve.purge: close}}
+  - {t: 1.129, set: {valve.ox_pre: close}}
+  - {t: 1.329, set: {valve.purge: open}}
+  - {t: 1.331, set: {valve.ox_pre: open}}
+  - {t: 1.334, set: {valve.purge: close}}
+  - {t: 1.339, set: {valve.ox_pre: close}}
+  - {t: 1.347, set: {valve.purge: open}}
+  - {t: 1.357, set: {valve.ox_pre: open}}
+  - {t: 1.372, set: {valve.purge: close}}
+  - {t: 1.392, set: {valve.ox_pre: close}}
+  - {t: 1.422, set: {valve.purge: open}}
+  - {t: 1.472, set: {valve.ox_pre: open}}
+  - {t: 1.572, set: {valve.purge: close}}
+  - {t: 1.772, set: {valve.ox_pre: close}}
+  - {t: 1.774, set: {valve.purge: open}}
+  - {t: 1.777, set: {valve.ox_pre: open}}
+  - {t: 1.782, set: {valve.purge: close}}
+  - {t: 1.790, set: {valve.ox_pre: close}}
+  - {t: 1.800, set: {valve.purge: open}}
+  - {t: 1.815, set: {valve.ox_pre: open}}
+  - {t: 1.835, set: {valve.purge: close}}
+  - {t: 1.865, set: {valve.ox_pre: close}}
+  - {t: 1.915, set: {valve.purge: open}}
+  - {t: 2.015, set: {valve.ox_pre: open}}
+  - {t: 2.215, set: {valve.purge: close}}
+  - {t: 2.217, set: {valve.ox_pre: close}}
+  - {t: 2.220, set: {valve.purge: open}}
+  - {t: 2.225, set: {valve.ox_pre: open}}
+  - {t: 2.233, set: {valve.purge: close}}
+  - {t: 2.243, set: {valve.ox_pre: close}}
+  - {t: 2.258, set: {valve.purge: open}}
+  - {t: 2.278, set: {valve.ox_pre: open}}
+  - {t: 2.308, set: {valve.purge: close}}
+  - {t: 2.358, set: {valve.ox_pre: close}}
+  - {t: 2.458, set: {valve.purge: open}}
+  - {t: 2.658, set: {valve.ox_pre: open}}
+  - {t: 2.660, set: {valve.purge: close}}
+  - {t: 2.663, set: {valve.ox_pre: close}}
+  - {t: 2.668, set: {valve.purge: open}}
+  - {t: 2.676, set: {valve.ox_pre: open}}
+  - {t: 2.686, set: {valve.purge: close}}
+  - {t: 2.701, set: {valve.ox_pre: close}}
+  - {t: 2.721, set: {valve.purge: open}}
+  - {t: 2.751, set: {valve.ox_pre: open}}
+  - {t: 2.801, set: {valve.purge: close}}
+  - {t: 2.901, set: {valve.ox_pre: close}}
+  - {t: 3.101, set: {valve.purge: open}}
+  - {t: 3.103, set: {valve.ox_pre: open}}
+  - {t: 3.106, set: {valve.purge: close}}
+  - {t: 3.111, set: {valve.ox_pre: close}}
+  - {t: 3.119, set: {valve.purge: open}}
+  - {t: 3.129, set: {valve.ox_pre: open}}
+  - {t: 3.144, set: {valve.purge: close}}
+  - {t: 3.164, set: {valve.ox_pre: close}}
+  - {t: 3.194, set: {valve.purge: open}}
+  - {t: 3.244, set: {valve.ox_pre: open}}
+  - {t: 3.344, set: {valve.purge: close}}
+  - {t: 3.544, set: {valve.ox_pre: close}}
+  - {t: 3.546, set: {valve.purge: open}}
+  - {t: 3.549, set: {valve.ox_pre: open}}
+  - {t: 3.554, set: {valve.purge: close}}
+  - {t: 3.562, set: {valve.ox_pre: close}}
+  - {t: 3.572, set: {valve.purge: open}}
+  - {t: 3.587, set: {valve.ox_pre: open}}
+  - {t: 3.607, set: {valve.purge: close}}
+  - {t: 3.637, set: {valve.ox_pre: close}}
+  - {t: 3.687, set: {valve.purge: open}}
+  - {t: 3.787, set: {valve.ox_pre: open}}
+  - {t: 3.987, set: {valve.purge: close}}
+  - {t: 3.989, set: {valve.ox_pre: close}}
+abort:
+  - {t: 0.000, set: {valve.purge: close, valve.ox_pre: close}}

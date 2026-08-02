@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync deps (no hardware extra — simulator only)
+        run: uv venv --python 3.12 && uv sync
+      - name: Ruff lint + format
+        run: |
+          uv run ruff check src shared tests
+          uv run ruff format --check src shared tests
+      - name: Generated register constants in sync (D10)
+        run: uv run tbctl codegen --check
+      - name: Example configs validate
+        run: uv run tbctl validate --config-dir configs
+      - name: Pytest (unit + simulator integration)
+        run: uv run pytest -q
+      - name: Lua CRC golden vectors (D8)
+        run: lua5.4 tests/lua/run_crc_tests.lua
+      - name: Real sequencer.lua state machine (§10.1)
+        run: lua5.4 tests/lua/run_sequencer_tests.lua
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Type-check + build
+        run: npm run build
