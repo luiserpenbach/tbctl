@@ -65,6 +65,19 @@ class ChecklistCheck(BaseModel):
     checked: bool
 
 
+class AnnotationCreate(BaseModel):
+    t0: float
+    t1: float
+    label: str
+    severity: Literal["info", "warn", "crit"] = "warn"
+
+
+class AnnotationPatch(BaseModel):
+    label: str | None = None
+    severity: Literal["info", "warn", "crit"] | None = None
+    status: Literal["open", "resolved"] | None = None
+
+
 def build_router(ctx: NodeContext) -> APIRouter:
     r = APIRouter(prefix="/api")
 
@@ -460,8 +473,59 @@ def build_router(ctx: NodeContext) -> APIRouter:
             raise HTTPException(409, str(e)) from e
         report = evaluate_run(ctx.bundle.review.model, path)
         store_report(path, report)
+        from tbctl.services.annotations import replace_rule_annotations
+
+        replace_rule_annotations(path, report)
         ctx.events.log("run_report", run_id=run_id, rerun=True, **report["summary"])
         return {"report": report}
+
+    def _ann_path(run_id: str):
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            return ctx.recorder.run_path(run_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @r.get("/runs/{run_id}/annotations")
+    def annotations_list(run_id: str) -> dict:
+        from tbctl.services.annotations import list_annotations
+
+        return {"annotations": list_annotations(_ann_path(run_id))}
+
+    @r.post("/runs/{run_id}/annotations")
+    def annotations_create(run_id: str, body: AnnotationCreate) -> dict:
+        from tbctl.services.annotations import add_annotation
+
+        if not body.label.strip():
+            raise HTTPException(400, "empty label")
+        ann = add_annotation(_ann_path(run_id), body.t0, body.t1, body.label.strip(), body.severity)
+        ctx.events.log("annotation_added", run_id=run_id, label=ann["label"], id=ann["id"])
+        return {"annotation": ann}
+
+    @r.patch("/runs/{run_id}/annotations/{aid}")
+    def annotations_update(run_id: str, aid: str, body: AnnotationPatch) -> dict:
+        from tbctl.services.annotations import update_annotation
+
+        try:
+            ann = update_annotation(_ann_path(run_id), aid, body.model_dump())
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        return {"annotation": ann}
+
+    @r.delete("/runs/{run_id}/annotations/{aid}")
+    def annotations_delete(run_id: str, aid: str) -> dict:
+        from tbctl.services.annotations import delete_annotation
+
+        try:
+            delete_annotation(_ann_path(run_id), aid)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        return {"ok": True}
 
     @r.get("/runs/{run_id}/events")
     def run_events(run_id: str) -> dict:

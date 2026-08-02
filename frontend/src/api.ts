@@ -204,6 +204,45 @@ export const fetchRunReport = (runId: string) =>
 export const rerunRunReport = (runId: string) =>
   post<{ report: RunReport }>(`/api/runs/${runId}/report/rerun`);
 
+// -------------------------------------------------------- annotations (tier 1)
+
+export interface Annotation {
+  id: string;
+  t0: number;
+  t1: number;
+  label: string;
+  severity: "info" | "warn" | "crit";
+  status: "open" | "resolved";
+  source: "user" | "rule";
+  created_at: number;
+  updated_at: number;
+}
+
+export const fetchAnnotations = (runId: string) =>
+  get<{ annotations: Annotation[] }>(`/api/runs/${runId}/annotations`);
+export const createAnnotation = (
+  runId: string,
+  body: { t0: number; t1: number; label: string; severity?: Annotation["severity"] },
+) => post<{ annotation: Annotation }>(`/api/runs/${runId}/annotations`, body);
+export const patchAnnotation = async (
+  runId: string,
+  aid: string,
+  body: Partial<Pick<Annotation, "label" | "severity" | "status">>,
+) => {
+  const r = await fetch(`/api/runs/${runId}/annotations/${aid}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json() as Promise<{ annotation: Annotation }>;
+};
+export const deleteAnnotation = async (runId: string, aid: string) => {
+  const r = await fetch(`/api/runs/${runId}/annotations/${aid}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+};
+
 // ------------------------------------------------------------- P&ID (ph. 13)
 
 export type PidElement =

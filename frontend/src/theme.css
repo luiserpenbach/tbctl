@@ -556,6 +556,24 @@ tr.stale, .pid-sensor.stale { opacity: 0.35; }
 .csv-link { color: var(--text-faint); font-family: var(--mono); font-size: 10px; text-decoration: none; margin-left: 6px; }
 .csv-link:hover { color: var(--accent); }
 
+/* annotation create form (chart overlay) */
+.ann-form {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 5px 9px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.ann-form .modal-input { width: 200px; flex: none; }
+
 /* run report bar (post-run review) */
 .report-bar {
   display: flex;
@@ -587,6 +605,25 @@ tr.stale, .pid-sensor.stale { opacity: 0.35; }
   background: color-mix(in srgb, var(--red) 10%, var(--bg-inset));
 }
 .report-rule.skip { opacity: 0.5; }
+.ann-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.ann-row .ann-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ann-row.sev-info .ann-dot { background: #4a9eff; }
+.ann-row.sev-warn .ann-dot { background: var(--amber); }
+.ann-row.sev-crit .ann-dot { background: var(--red); }
+.ann-row.sev-crit { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.ann-row.resolved { opacity: 0.45; text-decoration: line-through; }
 
 /* dashboard tabs: segmented-control strip like Sift's ALL / PASSED / FAILED */
 .dash-tabs {

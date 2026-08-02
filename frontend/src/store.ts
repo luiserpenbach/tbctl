@@ -25,6 +25,7 @@ interface TbctlStore {
   runs: RunMeta[];
   viewMode: ViewMode;
   overlayRuns: RunMeta[]; // runs overlaid on charts in run view (FIRE-aligned)
+  annotationsVersion: number; // bumped on any annotation change -> refetch
   events: EventRecord[];
   view: "dashboard" | "channels" | "sequences" | "pid";
 
@@ -34,6 +35,7 @@ interface TbctlStore {
   setRuns: (r: RunMeta[]) => void;
   setViewMode: (v: ViewMode) => void;
   toggleOverlayRun: (r: RunMeta) => void;
+  bumpAnnotations: () => void;
   setStatus: (s: NodeStatus) => void;
   setChannels: (c: ChannelInfo[]) => void;
   setSeqStatus: (s: SeqStatusMsg) => void;
@@ -62,6 +64,7 @@ export const useStore = create<TbctlStore>((set) => ({
   runs: [],
   viewMode: { mode: "live" },
   overlayRuns: [],
+  annotationsVersion: 0,
   events: [],
   view: "dashboard",
 
@@ -78,6 +81,7 @@ export const useStore = create<TbctlStore>((set) => ({
           ? []
           : s.overlayRuns.filter((r) => r.run_id !== viewMode.run.run_id),
     })),
+  bumpAnnotations: () => set((s) => ({ annotationsVersion: s.annotationsVersion + 1 })),
   toggleOverlayRun: (r) =>
     set((s) => ({
       overlayRuns: s.overlayRuns.some((o) => o.run_id === r.run_id)

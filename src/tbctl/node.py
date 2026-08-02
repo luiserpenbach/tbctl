@@ -108,6 +108,7 @@ def build_context(
         """Evaluate review rules against the just-closed run (Sift-style
         automated data review); reads ctx.bundle so hot-applied config edits
         are picked up."""
+        from tbctl.services.annotations import replace_rule_annotations
         from tbctl.services.review import evaluate_run, store_report
 
         review = ctx.bundle.review
@@ -115,6 +116,7 @@ def build_context(
             return
         report = evaluate_run(review.model, run.path)
         store_report(run.path, report)
+        replace_rule_annotations(run.path, report)
         events.log("run_report", run_id=run.run_id, **report["summary"])
 
     recorder.on_stop = _post_stop_review

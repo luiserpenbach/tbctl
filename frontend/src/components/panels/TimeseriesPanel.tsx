@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
-import { fetchLive, fetchRunData, fetchRunEvents } from "../../api";
+import {
+  createAnnotation,
+  fetchAnnotations,
+  fetchLive,
+  fetchRunData,
+  fetchRunEvents,
+  type Annotation,
+} from "../../api";
 import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
@@ -26,6 +33,12 @@ const AXIS = {
 const SYNC_KEY = uPlot.sync("tbctl");
 const DEFAULT_WINDOW_S = 60;
 const runShort = (runId: string) => runId.replace(/^\d{8}-/, "");
+
+const SEV_COLOR: Record<Annotation["severity"], string> = {
+  info: "#4a9eff",
+  warn: "#f0883e",
+  crit: "#f0413d",
+};
 
 const WINDOW_CHOICES: [number, string][] = [
   [10, "10s"],
@@ -80,6 +93,16 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const windowRef = useRef(windowS);
   windowRef.current = windowS;
   useEffect(() => setWindowS(panel.window_s ?? DEFAULT_WINDOW_S), [panel.window_s]);
+  // annotations on the primary run (shifted times in relative/overlay mode)
+  const annVersion = useStore((s) => s.annotationsVersion);
+  const bumpAnnotations = useStore((s) => s.bumpAnnotations);
+  const annRef = useRef<Annotation[]>([]);
+  const primT0Ref = useRef(0); // FIRE-time shift applied to drawn annotations
+  const relativeRef = useRef(false);
+  const [selRange, setSelRange] = useState<[number, number] | null>(null);
+  const [annForm, setAnnForm] = useState<{ t0: number; t1: number } | null>(null);
+  const [annLabel, setAnnLabel] = useState("");
+  const [annSev, setAnnSev] = useState<Annotation["severity"]>("warn");
 
   // one-time backfill of the ring-buffer window (live mode)
   useEffect(() => {
@@ -160,20 +183,54 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       hooks: {
         setSelect: [
           (u) => {
-            // drag-zoom: leave live-follow
             if (u.select.width > 10) {
+              // drag-zoom: leave live-follow; in run view, remember the
+              // selected time range so it can become an annotation
               followRef.current = false;
               setFollow(false);
+              if (isHistory) {
+                const t0 = u.posToVal(u.select.left, "x");
+                const t1 = u.posToVal(u.select.left + u.select.width, "x");
+                setSelRange([t0, t1]);
+              }
             }
           },
         ],
         draw: [
           (u) => {
-            // event markers over the plot area (run review, phase 15)
-            if (!markersRef.current.length) return;
+            // annotation bands under the event markers (Sift-style regions)
             const { ctx } = u;
             const top = u.bbox.top;
             const bottom = u.bbox.top + u.bbox.height;
+            if (annRef.current.length) {
+              ctx.save();
+              ctx.font = `${9 * devicePixelRatio}px monospace`;
+              ctx.textAlign = "left";
+              for (const a of annRef.current) {
+                const shift = relativeRef.current ? primT0Ref.current : 0;
+                const x0 = u.valToPos(a.t0 - shift, "x", true);
+                const x1 = u.valToPos(a.t1 - shift, "x", true);
+                const left = Math.max(x0, u.bbox.left);
+                const right = Math.min(x1, u.bbox.left + u.bbox.width);
+                if (right < u.bbox.left || left > u.bbox.left + u.bbox.width) continue;
+                const color = SEV_COLOR[a.severity];
+                const faded = a.status === "resolved";
+                ctx.fillStyle = color + (faded ? "14" : "26");
+                ctx.fillRect(left, top, Math.max(right - left, 2), bottom - top);
+                ctx.strokeStyle = color + (faded ? "55" : "aa");
+                ctx.lineWidth = devicePixelRatio;
+                ctx.strokeRect(left, top, Math.max(right - left, 2), bottom - top);
+                ctx.fillStyle = color;
+                ctx.fillText(
+                  a.label.slice(0, 40),
+                  left + 3 * devicePixelRatio,
+                  bottom - 4 * devicePixelRatio,
+                );
+              }
+              ctx.restore();
+            }
+            // event markers over the plot area (run review, phase 15)
+            if (!markersRef.current.length) return;
             ctx.save();
             ctx.font = `${10 * devicePixelRatio}px monospace`;
             ctx.textAlign = "center";
@@ -203,6 +260,8 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       el,
     );
     plotRef.current = plot;
+    // debug/testing handle (used by the Playwright checks)
+    (el as HTMLDivElement & { __uplot?: uPlot }).__uplot = plot;
 
     const ro = new ResizeObserver(() => {
       plot.setSize({ width: el.clientWidth, height: el.clientHeight });
@@ -215,16 +274,19 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       // fetch every run's data + events; t0 per run = last seq_fired
       // (fallback: run start) so overlays align on FIRE
       Promise.all(
-        runsToPlot.map(async (run) => {
-          const [ev, dat] = await Promise.all([
+        runsToPlot.map(async (run, idx) => {
+          const [ev, dat, ann] = await Promise.all([
             fetchRunEvents(run.run_id).catch(() => ({ events: [] as { event: string; time: number }[] })),
             fetchRunData(run.run_id, tags, 4000).catch(
               () => ({ run_id: run.run_id, series: {} }) as Awaited<ReturnType<typeof fetchRunData>>,
             ),
+            idx === 0
+              ? fetchAnnotations(run.run_id).catch(() => ({ annotations: [] as Annotation[] }))
+              : Promise.resolve({ annotations: [] as Annotation[] }),
           ]);
           let t0 = run.t_start;
           for (const e of ev.events) if (e.event === "seq_fired") t0 = e.time;
-          return { run, t0, series: dat.series, events: ev.events };
+          return { run, t0, series: dat.series, events: ev.events, annotations: ann.annotations };
         }),
       )
         .then((items) => {
@@ -242,24 +304,35 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
               }
             }
           }
+          // markers + annotations come from the primary run only. Set the
+          // refs BEFORE setData: uPlot commits on a microtask, so the draw
+          // triggered by setData picks them up. Do NOT call redraw() after
+          // setData — it synchronously re-queues the current (stale) x scale
+          // and clobbers the autoscale setData just queued.
+          const prim = items[0];
+          primT0Ref.current = prim.t0;
+          relativeRef.current = relative;
+          annRef.current = prim.annotations;
+          markersRef.current = prim.events
+            .map(toMarker)
+            .filter((m): m is Marker => m !== null)
+            .map((m) => (relative ? { ...m, t: m.t - prim.t0 } : m));
           if (tables.length) {
             const joined = uPlot.join(tables);
             const data: (number | null | undefined)[][] = [joined[0] as number[]];
             let j = 1;
             for (const p of present) data.push(p ? (joined[j++] as number[]) : []);
             plot.setData(data as uPlot.AlignedData);
+          } else {
+            plot.redraw();
           }
-          // event markers come from the primary run only
-          const prim = items[0];
-          markersRef.current = prim.events
-            .map(toMarker)
-            .filter((m): m is Marker => m !== null)
-            .map((m) => (relative ? { ...m, t: m.t - prim.t0 } : m));
-          plot.redraw();
         })
-        .catch(() => {});
+        .catch((e) => console.error("run chart load failed:", e));
     } else {
       markersRef.current = [];
+      annRef.current = [];
+      setSelRange(null);
+      setAnnForm(null);
       off = onTick(() => {
         const data = buffers.aligned(tags);
         // apply series visibility
@@ -289,7 +362,26 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     isHistory,
     viewMode.mode === "run" ? viewMode.run.run_id : "",
     overlayRuns.map((o) => o.run_id).join("|"),
+    annVersion,
   ]);
+
+  const saveAnnotation = () => {
+    if (!annForm || viewMode.mode !== "run" || !annLabel.trim()) return;
+    // selection coords are chart-x values: shift back to epoch in overlay mode
+    const shift = relativeRef.current ? primT0Ref.current : 0;
+    createAnnotation(viewMode.run.run_id, {
+      t0: annForm.t0 + shift,
+      t1: annForm.t1 + shift,
+      label: annLabel.trim(),
+      severity: annSev,
+    })
+      .then(() => {
+        setAnnForm(null);
+        setSelRange(null);
+        bumpAnnotations();
+      })
+      .catch(() => {});
+  };
 
   const toggleTag = (tag: string) =>
     setHidden((s) => {
@@ -340,6 +432,48 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
           <span className="chip" style={{ position: "absolute", top: 4, left: 6, zIndex: 5 }}>
             {viewMode.run.run_id}
           </span>
+        )}
+        {isHistory && viewMode.mode === "run" && selRange && !annForm && (
+          <div className="chart-toolbar" style={{ opacity: 1 }}>
+            <button
+              className="win-btn"
+              onClick={() => {
+                setAnnForm({ t0: selRange[0], t1: selRange[1] });
+                setAnnLabel("");
+              }}
+            >
+              + Annotate selection
+            </button>
+          </div>
+        )}
+        {annForm && viewMode.mode === "run" && (
+          <div className="ann-form">
+            <span className="microlabel">Annotate {`${(annForm.t1 - annForm.t0).toFixed(2)} s`}</span>
+            <input
+              className="modal-input"
+              autoFocus
+              placeholder="label…"
+              value={annLabel}
+              onChange={(e) => setAnnLabel(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveAnnotation()}
+            />
+            <select
+              className="seq-select"
+              style={{ flex: "none" }}
+              value={annSev}
+              onChange={(e) => setAnnSev(e.target.value as Annotation["severity"])}
+            >
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="crit">crit</option>
+            </select>
+            <button className="btn active" disabled={!annLabel.trim()} onClick={saveAnnotation}>
+              Save
+            </button>
+            <button className="btn" onClick={() => setAnnForm(null)}>
+              Cancel
+            </button>
+          </div>
         )}
         {!isHistory && (
           <div className="chart-toolbar">
