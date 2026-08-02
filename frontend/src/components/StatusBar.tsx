@@ -44,6 +44,12 @@ export function StatusBar() {
       >
         channels
       </button>
+      <button
+        className={`btn ${view === "sequences" ? "active" : ""}`}
+        onClick={() => setView("sequences")}
+      >
+        sequences
+      </button>
       <span className="chip">{dashboard?.name ?? "no dashboard"}</span>
       {status?.device.sim && <span className="chip warn"><span className="dot" />SIM</span>}
       <span className="spacer" />

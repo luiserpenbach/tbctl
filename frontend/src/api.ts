@@ -76,6 +76,72 @@ export interface CompileReport {
   redlines: RedlineInfo[];
 }
 
+export interface SeqStepCfg {
+  t: number;
+  set: Record<string, string>;
+}
+
+export interface BoundCfg {
+  tag: string;
+  min?: number;
+  max?: number;
+  persist_ms?: number;
+}
+
+export interface SequenceConfig {
+  name: string;
+  description: string;
+  max_duration_s: number;
+  preconditions: BoundCfg[];
+  steps: SeqStepCfg[];
+  abort: SeqStepCfg[];
+  allow_unsafe_end: boolean;
+  redlines: BoundCfg[];
+}
+
+export interface TimelineData {
+  outputs: { tag: string; bit: number; kind: string; active_level: number }[];
+  safe_word: number;
+  duration_ms: number;
+  abort_duration_ms: number;
+  steps: { t_ms: number; word: number }[];
+  abort: { t_ms: number; word: number }[];
+}
+
+export interface ValidateOk {
+  ok: true;
+  report: CompileReport & { size_bytes: number; safe_word: number };
+  timeline: TimelineData;
+}
+
+export interface ValidateErr {
+  ok: false;
+  errors: { loc: string; msg: string }[];
+}
+
+export const fetchSequenceConfig = (name: string) =>
+  get<{ config: SequenceConfig; sha256: string; editable: boolean }>(
+    `/api/sequences/${name}/config`,
+  );
+
+export async function validateSequence(body: SequenceConfig): Promise<ValidateOk | ValidateErr> {
+  const r = await fetch("/api/sequences/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.ok) return { ok: true, ...(await r.json()) };
+  const d = await r.json().catch(() => null);
+  const detail = d?.detail;
+  const errors = Array.isArray(detail)
+    ? detail
+    : [{ loc: "", msg: String(detail ?? `HTTP ${r.status}`) }];
+  return { ok: false, errors };
+}
+
+export const saveSequence = (name: string, body: SequenceConfig) =>
+  post<{ ok: boolean; sha256: string; backup: string | null }>(`/api/sequences/${name}`, body);
+
 export const fetchSequences = () => get<{ sequences: SequenceInfo[] }>("/api/sequences");
 export const loadSequence = (name: string) => post<CompileReport>(`/api/sequences/${name}/load`);
 export const armSequence = (confirm: string) => post("/api/sequences/arm", { confirm });

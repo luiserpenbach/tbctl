@@ -258,6 +258,76 @@ def build_router(ctx: NodeContext) -> APIRouter:
     def seq_preconditions() -> dict:
         return {"failures": ctx.sequencer.check_preconditions()}
 
+    # ---------------------------------------------- sequence editor (ph. 12)
+
+    _SEQ_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+    # POST /sequences/{name} would otherwise shadow these verbs for a
+    # sequence that happened to share the name
+    _SEQ_RESERVED = {"validate", "arm", "fire", "abort", "reset", "preconditions", "load"}
+
+    def _seq_editable(name: str) -> bool:
+        """A sequence is read-only while it is the one on the device and the
+        sequencer has left IDLE (loaded/armed/running)."""
+        loaded = ctx.sequencer.loaded
+        if loaded is None or loaded.name != name:
+            return True
+        return ctx.sequencer.state() == SeqState.IDLE
+
+    def _compile_or_422(payload: dict):
+        from pydantic import ValidationError
+
+        from tbctl.services.compiler import CompileError
+        from tbctl.services.config_editor import compile_sequence_payload
+
+        try:
+            return compile_sequence_payload(ctx, payload)
+        except ValidationError as e:
+            raise HTTPException(
+                422,
+                [
+                    {"loc": ".".join(str(x) for x in err["loc"]), "msg": err["msg"]}
+                    for err in e.errors()
+                ],
+            ) from e
+        except CompileError as e:
+            raise HTTPException(422, [{"loc": "compile", "msg": m} for m in e.errors]) from e
+
+    @r.get("/sequences/{name}/config")
+    def seq_config_get(name: str) -> dict:
+        if name not in ctx.bundle.sequences:
+            raise HTTPException(404, f"unknown sequence {name!r}")
+        loaded = ctx.bundle.sequences[name]
+        return {
+            "config": loaded.model.model_dump(exclude_none=True),
+            "sha256": loaded.sha256,
+            "path": str(loaded.path),
+            "editable": _seq_editable(name),
+        }
+
+    @r.post("/sequences/validate")
+    def seq_validate(payload: dict) -> dict:
+        """Dry-run compile: report + timeline preview, nothing written."""
+        from tbctl.services.config_editor import sequence_timeline
+
+        _, compiled = _compile_or_422(payload)
+        return {
+            "ok": True,
+            "report": compiled.report(),
+            "timeline": sequence_timeline(ctx, compiled),
+        }
+
+    @r.post("/sequences/{name}")
+    def seq_save(name: str, payload: dict) -> dict:
+        from tbctl.services.config_editor import apply_sequence
+
+        if not _SEQ_NAME_RE.match(name) or name in _SEQ_RESERVED:
+            raise HTTPException(400, f"bad sequence name {name!r}")
+        if not _seq_editable(name):
+            raise HTTPException(409, f"sequence {name!r} is loaded on the device; reset first")
+        payload["name"] = name  # save-as: the URL wins
+        _compile_or_422(payload)
+        return apply_sequence(ctx, name, payload)
+
     # ---------------------------------------------------- manual control
 
     @r.post("/manual/valve")
@@ -460,11 +530,11 @@ def build_router(ctx: NodeContext) -> APIRouter:
             version = await asyncio.to_thread(deploy_script, ctx.iface)
             await asyncio.to_thread(configure_watchdog, ctx.iface, ctx.bundle.channels.model)
         except ScriptLoadError as e:
+            import contextlib
+
             debug = ""
-            try:
+            with contextlib.suppress(Exception):
                 debug = await asyncio.to_thread(read_debug, ctx.iface)
-            except Exception:
-                pass
             raise HTTPException(502, f"deploy failed: {e}\nLUA_DEBUG: {debug}") from e
         ctx.events.log("lua_deployed", interp_version=version)
         return {"ok": True, "interp_version": version}

@@ -14,8 +14,9 @@ from pathlib import Path
 
 import yaml
 
-from tbctl.config.loader import load_channels
-from tbctl.config.models import ChannelMap, cross_validate_sequence
+from tbctl.config.loader import load_channels, load_sequence
+from tbctl.config.models import ChannelMap, Sequence, cross_validate_sequence, dio_number
+from tbctl.services.compiler import CompiledSequence, compile_sequence
 
 log = logging.getLogger(__name__)
 
@@ -76,4 +77,65 @@ async def apply_channels(ctx, chmap: ChannelMap, payload: dict) -> dict:
     log.info(
         "channels.yaml applied (%d channels), stream restarted", len(new_loaded.model.channels)
     )
+    return {"ok": True, "sha256": new_loaded.sha256, "backup": str(backup) if backup else None}
+
+
+# ---------------------------------------------------------------------------
+# sequence editor (roadmap v2 phase 12)
+# ---------------------------------------------------------------------------
+
+
+def compile_sequence_payload(ctx, payload: dict) -> tuple[Sequence, CompiledSequence]:
+    """Parse + compile an edited sequence against the live channel map.
+
+    Raises pydantic.ValidationError (model errors) or CompileError
+    (cross-validation / word-expansion errors) — the API maps both to 422.
+    """
+    seq = Sequence.model_validate(payload)
+    compiled = compile_sequence(seq, ctx.bundle.channels.model)
+    return seq, compiled
+
+
+def sequence_timeline(ctx, compiled: CompiledSequence) -> dict:
+    """Compiled table -> per-output lane data for the editor's preview.
+
+    What the preview shows is literally the words that fire: full-state
+    carry-forward words (D7), not the sparse YAML rows.
+    """
+    chmap = ctx.bundle.channels.model
+    return {
+        "outputs": [
+            {
+                "tag": c.tag,
+                "bit": dio_number(c.hw),
+                "kind": c.kind,
+                "active_level": chmap.active_level(c),
+            }
+            for c in chmap.outputs()
+        ],
+        "safe_word": compiled.table.safe_word,
+        "duration_ms": compiled.duration_ms,
+        "abort_duration_ms": compiled.abort_duration_ms,
+        "steps": [{"t_ms": s.t_ms, "word": s.dio_word} for s in compiled.table.steps],
+        "abort": [{"t_ms": s.t_ms, "word": s.dio_word} for s in compiled.table.abort],
+    }
+
+
+def apply_sequence(ctx, name: str, payload: dict) -> dict:
+    """Write configs/sequences/<name>.yaml (backing up any existing copy)
+    and reload it into the bundle. Caller has already compiled the payload."""
+    path = ctx.config_dir / "sequences" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = backup_file(path)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    new_loaded = load_sequence(path, ctx.bundle.channels.model)
+    ctx.bundle.sequences[name] = new_loaded
+
+    ctx.events.log(
+        "sequence_saved",
+        sequence=name,
+        sha256=new_loaded.sha256[:16],
+        backup=str(backup) if backup else None,
+    )
+    log.info("sequence %s saved (%d steps)", name, len(new_loaded.model.steps))
     return {"ok": True, "sha256": new_loaded.sha256, "backup": str(backup) if backup else None}
