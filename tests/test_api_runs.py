@@ -2,6 +2,7 @@
 
 import asyncio
 
+import h5py
 import httpx
 import pytest
 
@@ -25,7 +26,7 @@ async def client(tmp_path, monkeypatch):
             yield c
 
 
-async def test_run_lifecycle_via_api(client):
+async def test_run_lifecycle_via_api(client, tmp_path):
     r = await client.post(
         "/api/runs/start", json={"name": "api test", "operator": "luis", "notes": "n"}
     )
@@ -59,8 +60,28 @@ async def test_run_lifecycle_via_api(client):
     ).json()
     assert len(data["series"]["pressure.chamber"]["t"]) > 0
 
+    h5 = await client.get(f"/api/runs/{run_id}/file")
+    assert h5.status_code == 200
+    assert "application/x-hdf5" in h5.headers["content-type"]
+    downloaded = tmp_path / "downloaded.h5"
+    downloaded.write_bytes(h5.content)
+    with h5py.File(downloaded, "r") as f:
+        assert f.attrs["run_id"] == run_id
+        assert "groups" in f
+
+    assert (await client.get("/api/runs/nope/file")).status_code == 404
     assert (await client.get("/api/runs/nope/data", params={"tags": "a.b"})).status_code == 404
     assert (await client.post("/api/runs/stop")).status_code == 409
+
+
+async def test_run_file_rejected_while_recording(client):
+    r = await client.post(
+        "/api/runs/start", json={"name": "live file", "operator": "luis"}
+    )
+    run_id = r.json()["run_id"]
+    blocked = await client.get(f"/api/runs/{run_id}/file")
+    assert blocked.status_code == 409
+    await client.post("/api/runs/stop")
 
 
 async def test_dashboard_save(client):

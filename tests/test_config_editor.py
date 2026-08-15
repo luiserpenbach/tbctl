@@ -25,10 +25,14 @@ async def client(tmp_path):
 
 
 async def test_get_config(client):
+    import hashlib
+
     body = (await client.get("/api/config/channels")).json()
     assert body["config"]["device"]["ip"] == "192.168.10.20"
     assert any(c["tag"] == "pressure.chamber" for c in body["config"]["channels"])
     assert len(body["sha256"]) == 64
+    assert isinstance(body["yaml"], str) and "pressure.chamber" in body["yaml"]
+    assert hashlib.sha256(body["yaml"].encode("utf-8")).hexdigest() == body["sha256"]
 
 
 async def test_edit_cal_and_hot_apply(client):
