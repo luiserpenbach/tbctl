@@ -452,6 +452,30 @@ def build_router(ctx: NodeContext) -> APIRouter:
         except KeyError as e:
             raise HTTPException(404, str(e)) from e
 
+    @r.get("/runs/{run_id}/file")
+    def run_file(run_id: str):
+        """Raw HDF5 bytes for a closed run.
+
+        Metron's REST watcher (D12) pulls ``GET /api/runs`` then this
+        endpoint plus ``/annotations``. The actively-recording file is
+        409 — ingest must wait until ``stop_run`` closes it.
+        """
+        from fastapi.responses import FileResponse
+
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            path = ctx.recorder.run_path(run_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+        return FileResponse(
+            path,
+            media_type="application/x-hdf5",
+            filename=f"{run_id}.h5",
+        )
+
     @r.patch("/runs/{run_id}/meta")
     def run_meta_patch(run_id: str, body: RunMetaPatch) -> dict:
         """Mutable review metadata: tags + outcome (good/anomaly/scrub)."""
@@ -677,10 +701,17 @@ def build_router(ctx: NodeContext) -> APIRouter:
     @r.get("/config/channels")
     def config_channels_get() -> dict:
         loaded = ctx.bundle.channels
+        # Verbatim YAML so Metron can store the same bytes tbctl hashed
+        # into channels_sha256 (raw-file SHA, not a round-tripped dump).
+        try:
+            yaml_text = loaded.path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            yaml_text = None
         return {
             "config": loaded.model.model_dump(exclude_none=True),
             "sha256": loaded.sha256,
             "path": str(loaded.path),
+            "yaml": yaml_text,
         }
 
     @r.post("/config/channels")

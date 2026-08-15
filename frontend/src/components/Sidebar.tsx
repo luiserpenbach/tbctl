@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchRuns, runCsvUrl } from "../api";
+import { fetchRuns, runCsvUrl, runFileUrl } from "../api";
 import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
 import { isReadable } from "../types";
@@ -126,6 +126,15 @@ export function Sidebar() {
                   {overlaid ? "⊖" : "⊕"}
                 </a>
               )}
+              <a
+                className="csv-link"
+                title="download HDF5 (Metron ingest)"
+                href={runFileUrl(r.run_id)}
+                download
+                onClick={(e) => e.stopPropagation()}
+              >
+                h5⬇
+              </a>
               <a
                 className="csv-link"
                 title="download CSV (all input channels)"

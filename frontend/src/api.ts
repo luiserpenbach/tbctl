@@ -161,6 +161,7 @@ export const fetchRunEvents = (runId: string) =>
   get<{ events: EventRecord[] }>(`/api/runs/${runId}/events`);
 export const runCsvUrl = (runId: string, tags: string[]) =>
   `/api/runs/${runId}/export.csv?tags=${encodeURIComponent(tags.join(","))}`;
+export const runFileUrl = (runId: string) => `/api/runs/${runId}/file`;
 
 export interface ChecklistState {
   name: string;

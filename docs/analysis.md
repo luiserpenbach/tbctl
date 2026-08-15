@@ -39,6 +39,12 @@ run.events                     # full event log (valve cmds, FIRE, notes, ...)
 
 - CSV: `GET /api/runs/{id}/export.csv?tags=a,b&t0=&t1=` (full resolution,
   union timebase) — also linked from each run in the sidebar.
-- Raw HDF5: the file itself is the source of truth; `h5py.File(path)` layout:
-  `/groups/<rate_group>/{t,data}` with a `tags` attr, `/events` (JSON lines),
-  root attrs for metadata (`report_json`, `user_meta` for tags/outcome).
+- Raw HDF5: `GET /api/runs/{id}/file` returns the closed run file
+  (`application/x-hdf5`). This is the Metron REST-watcher download.
+  An actively recording run is `409`. Layout: `/groups/<rate_group>/{t,data}`
+  with a `tags` attr, `/events` (JSON lines), root attrs for metadata
+  (`report_json`, `user_meta` for tags/outcome).
+- Channel config: `GET /api/config/channels` includes `sha256`, parsed
+  `config`, and verbatim `yaml` (the same bytes hashed into
+  `channels_sha256`).
+- Annotations sidecar: `GET /api/runs/{id}/annotations`.
