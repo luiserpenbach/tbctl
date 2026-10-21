@@ -359,7 +359,7 @@ button.btn.confirm { animation: pulse 1.1s infinite; }
 .tree .chan.output .val.on { color: var(--good); }
 .tree .chan.output .val.off { color: var(--subtle); }
 .tree .chan.run { cursor: pointer; align-items: center; }
-.tree .chan.run.active { background: var(--surface-2); color: var(--foreground); box-shadow: inset 2px 0 0 var(--accent); }
+.tree .chan.run.active { background: var(--surface-2); color: var(--foreground); font-weight: 500; }
 .tree .chan.live-row { cursor: pointer; }
 .tree .chan.live-row.active { color: var(--foreground); }
 .run-links { display: inline-flex; gap: 2px; opacity: 0.55; transition: opacity 0.12s; }
