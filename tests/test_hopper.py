@@ -73,7 +73,14 @@ async def test_hopper_csv_export(client):
     run_id = await _pulse_run(client)
     r = await client.get(f"/api/runs/{run_id}/export/hopper.csv")
     assert r.status_code == 200
-    rows = list(csv.reader(io.StringIO(r.text)))
+    lines = r.text.splitlines()
+    comments = [line for line in lines if line.startswith("#")]
+    assert lines[: len(comments)] == comments  # run details come first
+    details = dict(line[2:].split(": ", 1) for line in comments[1:])
+    assert details["run_id"] == run_id and details["test_type"] == "igniter"
+    assert details["sequence"] == "pulse_test" and details["operator"] == "op"
+    assert "notes" not in details  # empty values are left out
+    rows = list(csv.reader(io.StringIO("\n".join(lines[len(comments) :]))))
     header, data = rows[0], rows[1:]
     assert header[:2] == ["timestamp", "testcaseId"]
     tags = header[2:]
@@ -138,11 +145,15 @@ async def test_legacy_run_file(client):
     with h5py.File(path, "r+") as f:
         del f.attrs["channels_json"]
         f.attrs["user_meta"] = json.dumps({"outcome": "good"})
+        f.attrs["notes"] = "line one\nline two"
     assert (await client.get(f"/api/runs/{run_id}")).json()["outcome"] == "pass"
     ch = hopper.run_channel_map(path)["channels"]
     assert ch["pressure.chamber"]["name"] == "pressure.chamber"
     assert ch["pressure.chamber"]["class"] == "unknown"
-    assert next(hopper.csv_rows(path)).startswith("timestamp,testcaseId,")
+    text = "".join(hopper.csv_rows(path))
+    assert "\ntimestamp,testcaseId," in text and "# test_type: igniter" in text
+    assert "# outcome: pass\n" in text  # legacy 'good', in hopper's vocabulary
+    assert "# notes: line one line two\n" in text  # one line per value
 
 
 async def test_cli_export(client, tmp_path):
@@ -150,7 +161,7 @@ async def test_cli_export(client, tmp_path):
     path = client.ctx.recorder.run_path(run_id)
     out = tmp_path / "export"
     assert cli_main(["export-hopper", str(path), "--out", str(out)]) == 0
-    assert (out / f"{run_id}.hopper.csv").read_text().startswith("timestamp,testcaseId,")
+    assert "\ntimestamp,testcaseId," in (out / f"{run_id}.hopper.csv").read_text()
     cmap = json.loads((out / f"{run_id}.channel-map.json").read_text())
     assert "valve.purge" in cmap["channels"]
 

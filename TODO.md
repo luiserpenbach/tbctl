@@ -138,9 +138,6 @@ Hopper T7, with a logic analyser on the outputs:
 
 ## 7. hopper-test-lab side (not blocking)
 
-- [ ] Prefill test type, operator, notes and procedure from tbctl. tbctl
-      already has them in the run file and in `GET /api/runs/{id}`; hopper
-      needs a way to read them (a sidecar JSON, or `#` header lines in the CSV).
 - [ ] "Send to hopper-test-lab" straight from the node into the shared
       Imports. This needs token auth on hopper's API (today it is the shared
       password cookie) and the Vercel Blob upload flow.

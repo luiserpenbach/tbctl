@@ -3,6 +3,9 @@ hopper-test-lab imports, plus a matching channel map.
 
 Contract (docs/hopper-test-lab.md):
 
+- Run details first, as `# key: value` comment lines (run_id, name,
+  test_type, sequence, operator, notes, outcome, t_start_utc); hopper fills
+  test type, operator, procedure and notes from them.
 - Wide CSV, header `timestamp,testcaseId,<tag>,...`. `timestamp` is epoch
   milliseconds (hopper reads values > 1e11 as absolute epoch ms, so the
   test date is right); `testcaseId` is the run id.
@@ -99,6 +102,30 @@ def run_channel_map(path: Path) -> dict:
         return channel_map(_run_channels(f), name)
 
 
+def _run_details(f: h5py.File, run_id: str) -> dict[str, str]:
+    """Header fields for the `# key: value` lines; empty values are left out."""
+    attrs = f.attrs
+    outcome = ""
+    if raw := attrs.get("user_meta"):
+        try:
+            outcome = str(json.loads(raw).get("outcome") or "")
+        except (ValueError, AttributeError):
+            outcome = ""
+    details = {
+        "run_id": run_id,
+        "name": attrs.get("name", ""),
+        "test_type": attrs.get("test_type", ""),
+        "sequence": attrs.get("sequence", ""),
+        "operator": attrs.get("operator", ""),
+        "notes": attrs.get("notes", ""),
+        "outcome": {"good": "pass", "scrub": "void"}.get(outcome, outcome),
+        "t_start_utc": attrs.get("t_start_utc", ""),
+    }
+    # one line each: no newlines inside a value
+    clean = {k: " ".join(str(v).split()) for k, v in details.items()}
+    return {k: v for k, v in clean.items() if v}
+
+
 def _cell(v: float) -> str:
     return "" if math.isnan(v) else repr(float(v))
 
@@ -116,6 +143,9 @@ def csv_rows(path: Path) -> Iterator[str]:
         for tag in tags:
             g, col = where[tag]
             series.append((g["t"][:], g["data"][:, col]))
+        details = _run_details(f, run_id)
+    yield "# tbctl run export for hopper-test-lab (docs/hopper-test-lab.md)\n"
+    yield "".join(f"# {k}: {v}\n" for k, v in details.items())
     yield "timestamp,testcaseId," + ",".join(tags) + "\n"
     prefix = f",{run_id},"
     yield from union_rows(series, lambda t: f"{t * 1000.0:.3f}{prefix}", _cell)

@@ -13,7 +13,8 @@ both sides together (`src/tbctl/services/hopper.py` here,
    `<run_id>.hopper.csv`, **`map⬇`** downloads `<run_id>.channel-map.json`.
    Same files from a shell: `uv run tbctl export-hopper /data/tbctl/runs/<run>.h5 --out .`
 3. hopper-test-lab → **Imports** → drop the CSV. Time, test date and the test
-   case ID (= run ID) are read from the file.
+   case ID (= run ID) are read from the file, and the analyse screen fills
+   in test type, operator, procedure (the sequence) and notes from the run.
 4. Channel map: once per channel configuration, create it in hopper-test-lab
    from the JSON (it is the exact `POST /api/channel-maps` body; while signed
    in, the browser console can do it:
@@ -26,9 +27,27 @@ both sides together (`src/tbctl/services/hopper.py` here,
 ## The CSV
 
 ```
+# tbctl run export for hopper-test-lab (docs/hopper-test-lab.md)
+# run_id: 20261021-144139-HF-sim
+# name: HF-sim
+# test_type: engine
+# sequence: hotfire_v1
+# operator: luis
+# notes: first hot fire, regulator at 30 bar
+# t_start_utc: 2026-10-21T14:41:39.585000+00:00
 timestamp,testcaseId,pressure.chamber,...,valve.ox_main,...,calc.dp_ox_inj
 1792593699585.755,20261021-144139-HF-sim,0.0334,...,0.0,...,-0.0411
 ```
+
+The `# key: value` lines above the header carry the run details: `run_id`,
+`name`, `test_type`, `sequence`, `operator`, `notes`, `outcome` and
+`t_start_utc`, one line each (newlines in notes become spaces), with empty
+values left out. hopper-test-lab fills test type, operator, procedure and
+notes from them; it leaves the outcome to the analyst, since its limit
+checks suggest one. pandas reads the file with `comment="#"`.
+
+hopper-test-lab versions without header support reject these files ("No
+time column found"), so deploy hopper-test-lab first.
 
 | Column | Content | Why |
 |---|---|---|
@@ -74,6 +93,6 @@ expressions and leaves them out when it re-reads the raw file.
 | procedure | sequence name | `procedure` |
 | operator, notes | run start form | `operator`, `notes` |
 
-Test type, sequence, operator and notes are in the run file and in
-`GET /api/runs/{id}`, but hopper-test-lab does not read them from the CSV
-yet; see `TODO.md` ("hopper-test-lab side").
+Test type, sequence, operator and notes travel in the CSV header (see
+above). Article, serial number and run number are not recorded by tbctl;
+they come from the hopper-test-lab template.
