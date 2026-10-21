@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import { fetchRunData } from "../../api";
+import { seriesColor, token } from "../../colors";
 import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
@@ -93,12 +94,13 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
       const padB = 26;
       const plotW = w - pad - padR;
       const plotH = h - padT - padB;
-      ctx.strokeStyle = "rgba(150, 180, 220, 0.12)";
+      const faint = token("--subtle");
+      ctx.strokeStyle = token("--line");
       ctx.lineWidth = 1;
       ctx.strokeRect(pad, padT, plotW, plotH);
 
-      ctx.font = "9.5px 'IBM Plex Mono', monospace";
-      ctx.fillStyle = "#586375";
+      ctx.font = "10.5px 'Geist Mono Variable', monospace";
+      ctx.fillStyle = faint;
       if (xs.length < 2) {
         ctx.textAlign = "center";
         ctx.fillText("waiting for data…", w / 2, h / 2);
@@ -119,14 +121,14 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
       const sy = (v: number) => padT + plotH - ((v - ymin) / (ymax - ymin)) * plotH;
 
       // axis labels: min/max + channel names
-      ctx.fillStyle = "#95a1b3";
+      ctx.fillStyle = token("--plot-axis");
       ctx.textAlign = "left";
       ctx.fillText(ymax.toFixed(1), 4, padT + 8);
       ctx.fillText(ymin.toFixed(1), 4, padT + plotH);
       ctx.textAlign = "center";
       ctx.fillText(xmin.toFixed(1), pad, h - 12);
       ctx.fillText(xmax.toFixed(1), pad + plotW, h - 12);
-      ctx.fillStyle = "#586375";
+      ctx.fillStyle = faint;
       ctx.fillText(`${xTag} [${unitOf(xTag)}]`, pad + plotW / 2, h - 2);
       ctx.save();
       ctx.translate(10, padT + plotH / 2);
@@ -135,11 +137,13 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
       ctx.restore();
 
       // points: newest brightest (live), uniform in run mode
+      ctx.fillStyle = seriesColor(0);
       for (let i = 0; i < xs.length; i++) {
         const age = isHistory ? 0.35 : 1 - i / xs.length;
-        ctx.fillStyle = `rgba(57, 135, 229, ${Math.max(0.15, 0.9 - age * 0.75)})`;
+        ctx.globalAlpha = Math.max(0.15, 0.9 - age * 0.75);
         ctx.fillRect(sx(xs[i]) - 1.25, sy(ys[i]) - 1.25, 2.5, 2.5);
       }
+      ctx.globalAlpha = 1;
     };
 
     draw();

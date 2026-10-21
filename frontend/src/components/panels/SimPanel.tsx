@@ -59,7 +59,7 @@ export function SimPanel() {
                   onChange={(e) => setEdits({ ...edits, [c.tag]: e.target.value })}
                   onKeyDown={(e) => e.key === "Enter" && apply(c.tag)}
                 />
-                <button className="btn" style={{ fontSize: 10, marginLeft: 3 }} onClick={() => apply(c.tag)}>
+                <button className="btn" style={{ marginLeft: 4 }} onClick={() => apply(c.tag)}>
                   set
                 </button>
               </td>

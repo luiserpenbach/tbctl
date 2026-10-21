@@ -89,15 +89,14 @@ export function RunReportBar() {
           {r.name} {r.skipped ? "SKIP" : `${fmtVal(r.value)} ${r.passed ? "✓" : "✗"}`}
         </span>
       ))}
-      <button className="btn" style={{ padding: "0 8px", fontSize: 9.5 }} onClick={rerun}>
+      <button className="btn sm" onClick={rerun}>
         {report ? "Re-evaluate" : "Evaluate"}
       </button>
       <span className="spacer" style={{ flex: 1 }} />
       {OUTCOMES.map((o) => (
         <button
           key={o}
-          className={`btn outcome-btn ${o} ${run.outcome === o ? "active" : ""}`}
-          style={{ padding: "0 8px", fontSize: 9.5 }}
+          className={`btn sm outcome-btn ${o} ${run.outcome === o ? "active" : ""}`}
           title="run outcome (click again to clear)"
           onClick={() =>
             saveMeta(run.outcome === o ? { clear_outcome: true } : { outcome: o })
@@ -119,8 +118,7 @@ export function RunReportBar() {
         }
       />
       <button
-        className="btn"
-        style={{ padding: "0 8px", fontSize: 9.5 }}
+        className="btn sm"
         title="copy a shareable link to this exact view"
         onClick={() =>
           navigator.clipboard
@@ -131,7 +129,7 @@ export function RunReportBar() {
       >
         Copy link
       </button>
-      {msg && <span style={{ fontSize: 10, color: "var(--amber)" }}>{msg}</span>}
+      {msg && <span style={{ fontSize: 11.5, color: "var(--amber)" }}>{msg}</span>}
     </div>
   );
 }

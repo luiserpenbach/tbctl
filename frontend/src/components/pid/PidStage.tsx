@@ -26,7 +26,7 @@ export function ValveSymbol({
   rotation: number;
   selected?: boolean;
 }) {
-  const stroke = selected ? "var(--accent)" : active === null ? "var(--text-faint)" : "#aab4c4";
+  const stroke = selected ? "var(--accent)" : active === null ? "var(--text-faint)" : "var(--muted)";
   if (kind === "igniter") {
     // lightning bolt, amber when firing
     return (

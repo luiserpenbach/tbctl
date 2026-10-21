@@ -93,11 +93,9 @@ function Ann({
       title={title}
       tabIndex={onClick ? 0 : -1}
     >
+      <span className="led" />
       <span className="ann-key">{k}</span>
-      <span className="ann-val">
-        <span className="led" />
-        {v}
-      </span>
+      <span className="ann-val">{v}</span>
     </button>
   );
 }
@@ -128,7 +126,13 @@ export function StatusBar() {
   const recording = status?.recording.active ?? false;
   const control = status?.control_enabled ?? false;
   const mode = status?.device.mode ?? "t7";
-  const deviceLabel = !deviceOk ? "Lost" : mode === "ethernet" ? status?.device.ip ?? "ETH" : mode;
+  const deviceLabel = !deviceOk
+    ? "Lost"
+    : mode === "ethernet"
+      ? (status?.device.ip ?? "Ethernet")
+      : mode === "usb"
+        ? "USB"
+        : "Sim";
 
   const toggleControl = () =>
     setControlMode(!control).then(() => fetchStatus().then((s) => useStore.getState().setStatus(s)));
@@ -144,7 +148,7 @@ export function StatusBar() {
       <div className="brand">
         <HopperMark />
         <div className="brand-text">
-          <span className="brand-name">HOPPER</span>
+          <span className="brand-name">Hopper</span>
           <span className="brand-sub">Test &amp; mission control</span>
         </div>
       </div>
@@ -158,17 +162,16 @@ export function StatusBar() {
       <span className="spacer" />
       <MissionClock />
       <div className="annunciators">
-        {status?.device.sim && <Ann k="Mode" v="Sim" tone="warn" title="simulator: no hardware" />}
         <Ann
           k="T7"
           v={deviceLabel}
-          tone={deviceOk ? "ok" : "bad"}
+          tone={!deviceOk ? "bad" : status?.device.sim ? "warn" : "ok"}
           onClick={() => setConnOpen(true)}
-          title="connection settings"
+          title={status?.device.sim ? "simulator: no hardware — connection settings" : "connection settings"}
         />
         <Ann k="Link" v={hbFresh ? "Up" : "Down"} tone={hbFresh ? "ok" : "bad"} />
         <Ann k="Seq" v={seqState} tone={SEQ_TONE[seqState] ?? ""} />
-        <Ann k="Rec" v={recording ? "Rec" : "Off"} tone={recording ? "rec" : ""} />
+        <Ann k="Rec" v={recording ? "On" : "Off"} tone={recording ? "rec" : ""} />
         <Ann
           k="Control"
           v={control ? "Live" : "Safe"}
