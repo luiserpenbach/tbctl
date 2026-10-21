@@ -2,8 +2,10 @@
 
 ## Cursor Cloud specific instructions
 
-`tbctl` is a single-product repo for rocket/thruster test-bench control (DAQ +
-valve control + deterministic firing sequences). It runs fully **hardware-free**
+`tbctl` is a single-product repo for Hopper test-bench and mission control (H2
+lander, Aldenhoven test bench: DAQ + valve control + deterministic firing
+sequences). Recorded runs are analysed in hopper-test-lab
+(`docs/hopper-test-lab.md`); keep the export contract there in sync. It runs fully **hardware-free**
 via a built-in simulator (`--sim`), which is how it is developed and tested in
 this environment. No database or other external backing service is required —
 runs are written to HDF5 files on local disk.

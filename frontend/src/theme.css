@@ -624,9 +624,10 @@ tr.stale, .pid-sensor.stale { opacity: 0.35; }
 .ann-row.sev-crit .ann-dot { background: var(--red); }
 .ann-row.sev-crit { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
 .ann-row.resolved { opacity: 0.45; text-decoration: line-through; }
-.outcome-btn.good.active { background: var(--green); border-color: var(--green); color: #04140a; }
-.outcome-btn.anomaly.active { background: var(--red); border-color: var(--red); color: #180404; }
-.outcome-btn.scrub.active { background: var(--text-faint); border-color: var(--text-faint); color: #0a0a0a; }
+.outcome-btn.pass.active { background: var(--green); border-color: var(--green); color: #04140a; }
+.outcome-btn.anomaly.active { background: var(--amber); border-color: var(--amber); color: #181004; }
+.outcome-btn.fail.active { background: var(--red); border-color: var(--red); color: #180404; }
+.outcome-btn.void.active { background: var(--text-faint); border-color: var(--text-faint); color: #0a0a0a; }
 
 /* dashboard tabs: segmented-control strip like Sift's ALL / PASSED / FAILED */
 .dash-tabs {

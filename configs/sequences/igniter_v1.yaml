@@ -1,0 +1,21 @@
+# EXAMPLE igniter test: 0.5 s igniter pulse with a short ox lead, N2 purge
+# after. Placeholder timings until the Hopper igniter procedure exists.
+name: igniter_v1
+description: Igniter check, 0.5 s pulse, N2 purge after
+test_type: igniter
+max_duration_s: 8.0
+preconditions:
+  - {tag: pressure.n2_purge, min: 8.0}
+redlines:
+  - {tag: pressure.chamber, max: 15.0, persist_ms: 60}
+steps:
+  - {t: 0.000, set: {valve.ox_pre: open}}
+  - {t: 0.300, set: {igniter.main: on}}
+  - {t: 0.800, set: {igniter.main: off}}
+  - {t: 0.850, set: {valve.ox_pre: close}}
+  - {t: 1.000, set: {valve.purge: open}}
+  - {t: 4.000, set: {valve.purge: close}}
+abort:
+  - {t: 0.000, set: {igniter.main: off, valve.ox_pre: close}}
+  - {t: 0.100, set: {valve.purge: open}}
+  - {t: 3.100, set: {valve.purge: close}}

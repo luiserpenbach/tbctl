@@ -133,7 +133,7 @@ channels; the P&ID becomes a live mimic + control surface.
 - **Viewer panel** (`type: pid` in the dashboard schema — additive):
   background SVG + overlaid elements. Valves draw as bowtie symbols
   colored by live state (10 Hz `dio_state` path, same as valve_panel):
-  open = green fill, closed = hollow, spark = bolt icon. Sensors show
+  open = green fill, closed = hollow, igniter = bolt icon. Sensors show
   live value + unit, red when outside an optional warn range. Clicking a
   valve issues the existing `/api/manual/valve` with the same gating
   (control mode + sequencer IDLE) and a small click-to-confirm popover —

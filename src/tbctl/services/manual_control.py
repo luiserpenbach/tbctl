@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 
-from tbctl.config.models import ChannelMap, SparkChannel, ValveChannel
+from tbctl.config.models import ChannelMap, IgniterChannel, ValveChannel
 from tbctl.hw.ljm_iface import DeviceInterface
 from tbctl.hw.registers_gen import REG_NAME, SeqState
 from tbctl.services.events import EventLog
@@ -37,9 +37,9 @@ class ManualControl:
             if state not in ("open", "close"):
                 raise ManualControlError(f"valve takes open/close, got {state!r}")
             active = state == "open"
-        elif isinstance(ch, SparkChannel):
+        elif isinstance(ch, IgniterChannel):
             if state not in ("on", "off"):
-                raise ManualControlError(f"spark takes on/off, got {state!r}")
+                raise ManualControlError(f"igniter takes on/off, got {state!r}")
             active = state == "on"
         else:
             raise ManualControlError(f"{tag!r} is not an output channel")

@@ -216,7 +216,7 @@ _LUA_CONST_KEYS = {
     "INTERP_VERSION": "v",
     "ARM_MAGIC": "m",
     "DEFAULT_HB_TIMEOUT_MS": "h",
-    "DEFAULT_SPARK_GUARD_MS": "g",
+    "DEFAULT_IGNITER_GUARD_MS": "g",
     "TICK_MS": "k",
     "MAX_STEPS": "s",
     "MIN_STEP_SPACING_MS": "p",

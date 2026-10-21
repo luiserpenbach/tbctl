@@ -20,14 +20,14 @@ export function ValveSymbol({
   rotation,
   selected,
 }: {
-  kind: "valve" | "spark";
+  kind: "valve" | "igniter";
   active: boolean | null; // null = unknown
   px: number;
   rotation: number;
   selected?: boolean;
 }) {
   const stroke = selected ? "var(--accent)" : active === null ? "var(--text-faint)" : "#aab4c4";
-  if (kind === "spark") {
+  if (kind === "igniter") {
     // lightning bolt, amber when firing
     return (
       <svg
@@ -79,7 +79,7 @@ export function PidStage({
   children,
 }: {
   cfg: PidConfigT;
-  valveKind: (channel: string) => "valve" | "spark";
+  valveKind: (channel: string) => "valve" | "igniter";
   liveValve?: (channel: string) => boolean | null;
   liveValue?: (channel: string) => number | null;
   staleOf?: (channel: string) => boolean;

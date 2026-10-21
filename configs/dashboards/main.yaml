@@ -1,5 +1,5 @@
-# Default hot-fire dashboard (spec §4.3 example).
-name: hotfire_main
+# Default dashboard (spec §4.3 example).
+name: main
 grid: {cols: 12, row_height_px: 40}
 panels:
   - {id: p1, type: timeseries, x: 0, y: 0, w: 8, h: 8,

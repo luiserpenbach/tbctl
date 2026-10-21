@@ -233,7 +233,8 @@ class SequencerService:
             raise SequencerError(f"cannot fire from {st.name}")
         await asyncio.to_thread(self._write, "CMD", Cmd.FIRE)
         await self._await_state(SeqState.RUNNING, SeqState.DONE)
-        self._events.log("seq_fired", sequence=self.loaded.name)
+        seq_model = self._bundle.sequences[self.loaded.name].model
+        self._events.log("seq_fired", sequence=self.loaded.name, test_type=seq_model.test_type)
 
     async def abort(self) -> None:
         """ALWAYS accepted; the fastest path (§7). No state checks first."""

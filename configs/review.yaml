@@ -1,4 +1,4 @@
-# Post-run review rules (Sift-style automated data review). Evaluated over
+# EXAMPLE post-run review rules (Sift-style automated data review). Evaluated over
 # the recorded data every time a run stops; results are stored in the run
 # file as a pass/fail report. These never abort — live limits are redlines.
 rules:

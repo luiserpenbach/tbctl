@@ -2,10 +2,11 @@
 
 Covers:
   - streamed synthetic sensor data (noise + per-tag settable setpoints)
+  - streamed DIO image (FIO_EIO_STATE) with 1 ms edge timing
   - USER_RAM register file + DIO_STATE/DIO_INHIBIT semantics
   - FIFO accepting §5 payloads
   - a faithful reimplementation of the §6 Lua sequencer state machine,
-    including CRC verification, heartbeat timeout and the spark guard
+    including CRC verification, heartbeat timeout and the igniter guard
 
 The embedded "Lua" runs on virtual 1 ms ticks, advanced lazily from the
 mock's clock on every device interaction — no background threads, so tests
@@ -16,6 +17,7 @@ against it with zero hardware. It is also the operator training mode.
 
 from __future__ import annotations
 
+import bisect
 import math
 import random
 import struct
@@ -27,9 +29,9 @@ import numpy as np
 from tbctl.config.models import (
     AnalogInChannel,
     ChannelMap,
+    IgniterChannel,
     LinearCal,
     PolynomialCal,
-    SparkChannel,
     TableCal,
     ThermocoupleChannel,
     ValveChannel,
@@ -52,6 +54,7 @@ from tbctl.hw.registers_gen import (
 from tbctl.services.thermocouple import type_k_emf_mv
 
 _NAME_OF = REG_NAME  # logical -> LJM register name
+DIO_SCAN_NAME = "FIO_EIO_STATE"  # see tbctl.services.acquisition
 
 
 class LuaSequencerSim:
@@ -74,12 +77,12 @@ class LuaSequencerSim:
         self.abort_w: list[int] = []
         self.dio_inhibit = 0xFFFF
         self.safe_word = 0
-        self.spark_guard_ms = 0
-        self.spark_mask = 0
+        self.igniter_guard_ms = 0
+        self.igniter_mask = 0
         self.crc = 0
         self.cur_step = 0  # 1-based index of next step (main or abort)
         self.elapsed_ms = 0
-        self.spark_on_ms = 0
+        self.igniter_on_ms = 0
         self.hb_last_value = 0
         self.hb_last_change_ms = 0
         self.now_ms = 0
@@ -107,7 +110,7 @@ class LuaSequencerSim:
         self.error = error
         self.elapsed_ms = 0
         self.cur_step = 1
-        self.spark_on_ms = 0
+        self.igniter_on_ms = 0
         if self.n_abort == 0:
             # empty abort table (compiler forbids it, but be safe): safe word now
             self._apply_word(self.safe_word)
@@ -159,7 +162,7 @@ class LuaSequencerSim:
         self.step_t, self.step_w = step_t, step_w
         self.abort_t, self.abort_w = abort_t, abort_w
         self.dio_inhibit, self.safe_word = inhibit, safe
-        self.spark_guard_ms, self.spark_mask = guard, mask
+        self.igniter_guard_ms, self.igniter_mask = guard, mask
         self.crc = crc_actual
         self.cur_step = 0
         self.elapsed_ms = 0
@@ -187,7 +190,7 @@ class LuaSequencerSim:
             self.state = SeqState.RUNNING
             self.elapsed_ms = 0
             self.cur_step = 1
-            self.spark_on_ms = 0
+            self.igniter_on_ms = 0
             self._publish()
         elif cmd == Cmd.ABORT:
             if self.state == SeqState.RUNNING:
@@ -224,18 +227,18 @@ class LuaSequencerSim:
             self.hb_last_change_ms = self.now_ms
         return (self.now_ms - self.hb_last_change_ms) <= self._hb_timeout_ms()
 
-    def _track_spark(self, applied_word: int, dt_ms: int) -> bool:
+    def _track_igniter(self, applied_word: int, dt_ms: int) -> bool:
         """Returns False when the guard trips."""
-        if not self.spark_guard_ms or not self.spark_mask:
+        if not self.igniter_guard_ms or not self.igniter_mask:
             return True
-        if applied_word & self.spark_mask:
-            self.spark_on_ms += dt_ms
-            if self.spark_on_ms > self.spark_guard_ms:
-                # force spark low immediately, then abort
-                self._apply_word(self._m.dio_word16() & ~self.spark_mask & 0xFFFF)
+        if applied_word & self.igniter_mask:
+            self.igniter_on_ms += dt_ms
+            if self.igniter_on_ms > self.igniter_guard_ms:
+                # force igniter low immediately, then abort
+                self._apply_word(self._m.dio_word16() & ~self.igniter_mask & 0xFFFF)
                 return False
         else:
-            self.spark_on_ms = 0
+            self.igniter_on_ms = 0
         return True
 
     def tick(self) -> None:
@@ -256,8 +259,8 @@ class LuaSequencerSim:
                 self._apply_word(self.step_w[i - 1])
                 i += 1
             self.cur_step = i
-            if not self._track_spark(self._m.dio_word16(), 1):
-                self._start_abort(SeqError.SPARK_GUARD)
+            if not self._track_igniter(self._m.dio_word16(), 1):
+                self._start_abort(SeqError.IGNITER_GUARD)
                 return
             if not self._check_heartbeat():
                 self._start_abort(SeqError.HB_TIMEOUT)
@@ -298,6 +301,11 @@ class MockDevice:
         self._open = False
         self._regs: dict[str, float] = {}
         self._dio_state = 0  # u32 electrical image
+        # DIO word history (time, word16) so streamed FIO_EIO_STATE samples
+        # see edges at their 1 ms tick time, not at block read time
+        self._dio_hist_t: list[float] = []
+        self._dio_hist_w: list[int] = []
+        self._tick_at: float | None = None  # virtual time of the tick in progress
         self._dio_inhibit_reg = 0  # value of the DIO_INHIBIT register
         self._fifo = bytearray()
         self._setpoints_eu: dict[str, float] = {}
@@ -348,17 +356,36 @@ class MockDevice:
         if dt_ms <= 0:
             return
         dt_ms = min(dt_ms, self.MAX_CATCHUP_MS)
-        self._last_advance = now
-        for _ in range(dt_ms):
-            self._lua.tick()
+        start, self._last_advance = self._last_advance, now
+        try:
+            for k in range(dt_ms):
+                self._tick_at = start + (k + 1) / 1000.0
+                self._lua.tick()
+        finally:
+            self._tick_at = None
 
     # ----------------------------------------------------------- DIO image
     def apply_dio_masked(self, word16: int, inhibit16: int) -> None:
         keep = self._dio_state & (0xFFFF0000 | (inhibit16 & 0xFFFF))
         self._dio_state = keep | (word16 & ~inhibit16 & 0xFFFF)
+        self._note_dio()
 
     def dio_word16(self) -> int:
         return self._dio_state & 0xFFFF
+
+    def _note_dio(self) -> None:
+        w = self.dio_word16()
+        if self._dio_hist_w and self._dio_hist_w[-1] == w:
+            return
+        self._dio_hist_t.append(self._clock() if self._tick_at is None else self._tick_at)
+        self._dio_hist_w.append(w)
+        if len(self._dio_hist_t) > 10_000:  # bounded; stream reads are ~0.1 s behind
+            del self._dio_hist_t[:5_000], self._dio_hist_w[:5_000]
+
+    def dio_word_at(self, t: float) -> int:
+        """DIO word (16-bit) as it was at mock-clock time t."""
+        i = bisect.bisect_right(self._dio_hist_t, t) - 1
+        return self._dio_hist_w[max(i, 0)] if self._dio_hist_w else self.dio_word16()
 
     # ------------------------------------------------------------ registers
     def open(self) -> None:
@@ -393,7 +420,7 @@ class MockDevice:
 
     def read_name(self, name: str) -> float:
         self.advance()
-        if name in self._by_hw and isinstance(self._by_hw[name], ValveChannel | SparkChannel):
+        if name in self._by_hw and isinstance(self._by_hw[name], ValveChannel | IgniterChannel):
             return float((self._dio_state >> dio_number(name)) & 1)
         if name == "DIO_STATE":
             return float(self._dio_state)
@@ -410,12 +437,13 @@ class MockDevice:
 
     def write_name(self, name: str, value: float) -> None:
         self.advance()
-        if name in self._by_hw and isinstance(self._by_hw[name], ValveChannel | SparkChannel):
+        if name in self._by_hw and isinstance(self._by_hw[name], ValveChannel | IgniterChannel):
             bit = dio_number(name)
             if value:
                 self._dio_state |= 1 << bit
             else:
                 self._dio_state &= ~(1 << bit)
+            self._note_dio()
             return
         if name == "DIO_INHIBIT":
             self._dio_inhibit_reg = int(value)
@@ -466,7 +494,7 @@ class MockDevice:
         self, scan_names: list[str], scan_rate_hz: float, scans_per_read: int
     ) -> float:
         for n in scan_names:
-            if n not in self._by_hw:
+            if n not in self._by_hw and n != DIO_SCAN_NAME:
                 raise ValueError(f"cannot stream unknown hw {n!r}")
         self._scan_names = list(scan_names)
         self._scan_rate = float(scan_rate_hz)
@@ -489,7 +517,10 @@ class MockDevice:
         for i in range(n):
             t = self._stream_t0 + (self._stream_idx + i) / self._scan_rate
             for j, name in enumerate(self._scan_names):
-                block[i, j] = self._volts_for(self._by_hw[name], t)
+                if name == DIO_SCAN_NAME:
+                    block[i, j] = float(self.dio_word_at(t))
+                else:
+                    block[i, j] = self._volts_for(self._by_hw[name], t)
         self._stream_idx += n
         # backlog: scans generated but not yet fetched beyond this block
         avail = int((self._clock() - self._stream_t0) * self._scan_rate) - self._stream_idx

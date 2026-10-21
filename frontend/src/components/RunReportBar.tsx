@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { fetchRunReport, fetchRuns, patchRunMeta, rerunRunReport, type RunReport } from "../api";
 import { useStore } from "../store";
+import { OUTCOME_LABEL, type Outcome } from "../types";
 
-const OUTCOMES = ["good", "anomaly", "scrub"] as const;
+const OUTCOMES = Object.keys(OUTCOME_LABEL) as Outcome[];
 
 // Automated post-run review report (Sift-style): pass/fail per rule for the
 // selected run, shown while reviewing it. Rules live in configs/review.yaml.
@@ -102,7 +103,7 @@ export function RunReportBar() {
             saveMeta(run.outcome === o ? { clear_outcome: true } : { outcome: o })
           }
         >
-          {o}
+          {OUTCOME_LABEL[o]}
         </button>
       ))}
       <input

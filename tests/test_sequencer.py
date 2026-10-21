@@ -28,7 +28,7 @@ def seq(steps, abort=None, **overrides) -> Sequence:
                 "set": {
                     "valve.ox_main": "close",
                     "valve.fuel_main": "close",
-                    "spark.igniter": "off",
+                    "igniter.main": "off",
                 },
             }
         ],
@@ -45,13 +45,13 @@ def test_compile_hotfire_example(chmap):
     compiled = compile_sequence(bundle.sequences["hotfire_v1"].model, chmap)
     r = compiled.report()
     assert r["n_steps"] == 10
-    assert r["spark_guard_ms"] == 2000
-    assert r["spark_mask"] == 1 << 6
+    assert r["igniter_guard_ms"] == 2000
+    assert r["igniter_mask"] == 1 << 6
     assert r["warnings"] == []
-    # carry-forward: at t=2.60 purge closed, spark on, ox+fuel open
+    # carry-forward: at t=2.60 purge closed, igniter on, ox+fuel open
     words = {s.t_ms: s.dio_word for s in compiled.table.steps}
-    assert words[2600] == (1 << 6) | 0b11  # spark + ox_main + fuel_main
-    assert words[2800] == 0b11  # spark off, mains still open
+    assert words[2600] == (1 << 6) | 0b11  # igniter + ox_main + fuel_main
+    assert words[2800] == 0b11  # igniter off, mains still open
     assert compiled.table.steps[-1].dio_word == chmap.safe_word()
 
 
@@ -97,22 +97,22 @@ def test_abort_must_end_safe(chmap):
         )
 
 
-def test_static_spark_on_time_rejected(chmap):
-    with pytest.raises(CompileError, match="spark on for"):
+def test_static_igniter_on_time_rejected(chmap):
+    with pytest.raises(CompileError, match="igniter on for"):
         compile_sequence(
             seq(
                 [
-                    {"t": 0.0, "set": {"spark.igniter": "on"}},
-                    {"t": 3.0, "set": {"spark.igniter": "off"}},  # 3000 ms > 2000 max_on_ms
+                    {"t": 0.0, "set": {"igniter.main": "on"}},
+                    {"t": 3.0, "set": {"igniter.main": "off"}},  # 3000 ms > 2000 max_on_ms
                 ]
             ),
             chmap,
         )
 
 
-def test_spark_on_at_table_end_counts(chmap):
+def test_igniter_on_at_table_end_counts(chmap):
     with pytest.raises(CompileError):  # unsafe end AND implied on-time to end
-        compile_sequence(seq([{"t": 0.0, "set": {"spark.igniter": "on"}}]), chmap)
+        compile_sequence(seq([{"t": 0.0, "set": {"igniter.main": "on"}}]), chmap)
 
 
 def test_unknown_tag_rejected(chmap):

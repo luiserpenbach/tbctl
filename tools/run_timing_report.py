@@ -35,7 +35,7 @@ REPO = Path(__file__).resolve().parents[1]
 OUT_JSON = REPO / "docs" / "timing-report-results.json"
 REPORT = REPO / "docs" / "timing-report.md"
 MAX_STEPS = 100  # full timing_test; streaming LOAD parse removed the OOM cap
-BIT = {"valve.purge": 4, "valve.ox_pre": 5, "spark.igniter": 6}
+BIT = {"valve.purge": 4, "valve.ox_pre": 5, "igniter.main": 6}
 
 
 def soft_reboot() -> None:
@@ -272,7 +272,7 @@ def test1(dev: LjmDevice, chmap) -> dict:
 
 
 def test2(dev: LjmDevice, bundle) -> dict:
-    print("\n=== 2. Abort + spark guard ===")
+    print("\n=== 2. Abort + igniter guard ===")
     out: dict = {}
     compiled = compile_sequence(bundle.sequences["coldflow_v1"].model, bundle.channels.model)
     upload_compiled(dev, compiled)
@@ -285,7 +285,7 @@ def test2(dev: LjmDevice, bundle) -> dict:
     while time.perf_counter() - t0 < 1.0:
         st = int(ljm.eReadName(h, REG_NAME["STATE"]))
         dio = int(ljm.eReadName(h, "DIO_STATE"))
-        # abort table closes mains / spark; coldflow abort opens purge eventually
+        # abort table closes mains / igniter; coldflow abort opens purge eventually
         if st in (int(SeqState.ABORTING), int(SeqState.ABORTED)):
             lat = (time.perf_counter() - t0) * 1000.0
             break
@@ -301,14 +301,14 @@ def test2(dev: LjmDevice, bundle) -> dict:
     reset_idle(dev)
 
     chmap = bundle.channels.model
-    spark_bit = 1 << BIT["spark.igniter"]
+    igniter_bit = 1 << BIT["igniter.main"]
     safe = chmap.safe_word()
     table = StepTable(
         dio_inhibit=chmap.dio_inhibit(),
         safe_word=safe,
-        spark_guard_ms=5,
-        spark_mask=spark_bit,
-        steps=(Step(0, spark_bit | safe), Step(200, safe)),
+        igniter_guard_ms=5,
+        igniter_mask=igniter_bit,
+        steps=(Step(0, igniter_bit | safe), Step(200, safe)),
         abort=(Step(0, safe),),
     )
     # upload raw words
@@ -322,25 +322,25 @@ def test2(dev: LjmDevice, bundle) -> dict:
     dev.write_name(REG_NAME["CMD"], float(Cmd.LOAD))
     st = await_state(dev, SeqState.LOADED, SeqState.FAULT)
     if st == SeqState.FAULT:
-        out["spark_error"] = SeqError(int(dev.read_name(REG_NAME["ERROR_CODE"]))).name
-        out["spark_guard_pass"] = False
+        out["igniter_error"] = SeqError(int(dev.read_name(REG_NAME["ERROR_CODE"]))).name
+        out["igniter_guard_pass"] = False
         return out
     arm_fire(dev, hb_ms=5000)
     samples = poll_dio(dev, 0.35, hb=True)
-    edges = edges_for_bit(samples, BIT["spark.igniter"])
+    edges = edges_for_bit(samples, BIT["igniter.main"])
     rise = next((t for t, lvl in edges if lvl == 1), None)
     fall = next((t for t, lvl in edges if lvl == 0 and rise is not None and t > rise), None)
     on_ms = None if rise is None or fall is None else fall - rise
     past = None if on_ms is None else on_ms - 5.0
-    out["spark_on_ms"] = on_ms
-    out["spark_past_guard_ms"] = past
-    out["spark_state"] = SeqState(int(dev.read_name(REG_NAME["STATE"]))).name
-    out["spark_error"] = SeqError(int(dev.read_name(REG_NAME["ERROR_CODE"]))).name
+    out["igniter_on_ms"] = on_ms
+    out["igniter_past_guard_ms"] = past
+    out["igniter_state"] = SeqState(int(dev.read_name(REG_NAME["STATE"]))).name
+    out["igniter_error"] = SeqError(int(dev.read_name(REG_NAME["ERROR_CODE"]))).name
     # Functional pass: guard tripped (error code). Edge latency needs LA / faster poll.
-    out["spark_guard_pass"] = out["spark_error"] == "SPARK_GUARD" or (
+    out["igniter_guard_pass"] = out["igniter_error"] == "IGNITER_GUARD" or (
         past is not None and past < 3.0
     )
-    print("spark", out)
+    print("igniter", out)
     reset_idle(dev)
     return out
 
@@ -425,7 +425,7 @@ def test5() -> dict:
 def fill_report(results: dict) -> None:
     s = results["setup"]
     t1 = results["tests"].get("1_step_timing", {})
-    t2 = results["tests"].get("2_abort_spark", {})
+    t2 = results["tests"].get("2_abort_igniter", {})
     t3 = results["tests"].get("3_hb_loss", {})
     t4 = results["tests"].get("4_watchdog", {})
     t5 = results["tests"].get("5_power_cycle", {})
@@ -482,9 +482,9 @@ def fill_report(results: dict) -> None:
 | Path | Latency | Pass? |
 |---|---|---|
 | CMD abort → ABORTING/ABORTED | {f(t2.get("rest_abort_ms"))} ms | {t2.get("rest_abort_pass")} |
-| Spark guard trip → spark low (past 5 ms guard) | {f(t2.get("spark_past_guard_ms"))} ms (on={f(t2.get("spark_on_ms"))}) | {t2.get("spark_guard_pass")} |
+| Igniter guard trip → igniter low (past 5 ms guard) | {f(t2.get("igniter_past_guard_ms"))} ms (on={f(t2.get("igniter_on_ms"))}) | {t2.get("igniter_guard_pass")} |
 
-Spark end state: {t2.get("spark_state")} / {t2.get("spark_error")}
+Igniter end state: {t2.get("igniter_state")} / {t2.get("igniter_error")}
 
 ## 3. Ethernet-pull-to-abort latency
 
@@ -573,7 +573,7 @@ def main() -> int:
         print("SETUP", json.dumps(results["setup"], indent=2))
         for key, fn in (
             ("1_step_timing", lambda: test1(dev, chmap)),
-            ("2_abort_spark", lambda: test2(dev, bundle)),
+            ("2_abort_igniter", lambda: test2(dev, bundle)),
             ("3_hb_loss", lambda: test3(dev, bundle)),
         ):
             try:

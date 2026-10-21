@@ -10,8 +10,8 @@ def table() -> StepTable:
     return StepTable(
         dio_inhibit=0xFF80,
         safe_word=0x0000,
-        spark_guard_ms=2000,
-        spark_mask=0x0040,
+        igniter_guard_ms=2000,
+        igniter_mask=0x0040,
         steps=(Step(0, 0x0010), Step(2000, 0x0000), Step(2500, 0x0041)),
         abort=(Step(0, 0x0000), Step(100, 0x0010)),
     )
@@ -57,8 +57,8 @@ def test_non_monotonic_rejected():
 
 
 def test_guard_without_mask_rejected():
-    with pytest.raises(TableFormatError, match="spark_mask"):
-        StepTable(0, 0, spark_guard_ms=100, spark_mask=0)
+    with pytest.raises(TableFormatError, match="igniter_mask"):
+        StepTable(0, 0, igniter_guard_ms=100, igniter_mask=0)
 
 
 def test_too_many_steps_rejected():

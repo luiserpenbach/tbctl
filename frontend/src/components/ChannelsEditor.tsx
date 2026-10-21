@@ -12,8 +12,9 @@ type Cal =
 
 interface Chan {
   tag: string;
+  name?: string;
   hw?: string;
-  kind: "analog_in" | "thermocouple_k" | "valve" | "spark" | "derived";
+  kind: "analog_in" | "thermocouple_k" | "valve" | "igniter" | "derived";
   unit?: string;
   range?: number;
   cal?: Cal;
@@ -26,7 +27,7 @@ interface Chan {
 }
 
 interface Config {
-  device: { ip: string; connection: string; watchdog_timeout_s: number };
+  device: { ip: string; connection: string; watchdog_timeout_s: number; record_outputs?: boolean };
   rate_groups: Record<string, { rate_hz: number }>;
   channels: Chan[];
 }
@@ -100,7 +101,7 @@ function ChannelForm({
   const [c, setC] = useState<Chan>(JSON.parse(JSON.stringify(chan)));
   const upd = (patch: Partial<Chan>) => setC({ ...c, ...patch });
   const isAnalog = c.kind === "analog_in";
-  const isOutput = c.kind === "valve" || c.kind === "spark";
+  const isOutput = c.kind === "valve" || c.kind === "igniter";
 
   const tare = (target = 0) => {
     if (raw === null || !c.cal) return;
@@ -126,6 +127,10 @@ function ChannelForm({
           <span style={{ width: 70 }}>tag</span>
           {inp(c.tag, (s) => upd({ tag: s }), 180)}
         </div>
+        <div className="modal-row" title="P&ID / display name, e.g. PT-CC-01 — the channel name in hopper-test-lab exports">
+          <span style={{ width: 70 }}>name</span>
+          {inp(c.name, (s) => upd({ name: s }), 180)}
+        </div>
         <div className="modal-row">
           <span style={{ width: 70 }}>kind</span>
           <select
@@ -133,12 +138,12 @@ function ChannelForm({
             value={c.kind}
             onChange={(e) => {
               const kind = e.target.value as Chan["kind"];
-              const base: Chan = { tag: c.tag, hw: c.hw, kind };
+              const base: Chan = { tag: c.tag, name: c.name, hw: c.hw, kind };
               if (kind === "analog_in")
                 Object.assign(base, { unit: "bar", range: 10.0, cal: { kind: "linear", gain: 1, offset: 0 }, rate_group: "default" });
               if (kind === "thermocouple_k") Object.assign(base, { unit: "degC", rate_group: "default" });
               if (kind === "valve") Object.assign(base, { fail_safe: "closed", open_state: "high" });
-              if (kind === "spark") Object.assign(base, { fail_safe: "off", on_state: "high", max_on_ms: 2000 });
+              if (kind === "igniter") Object.assign(base, { fail_safe: "off", on_state: "high", max_on_ms: 2000 });
               if (kind === "derived") {
                 delete base.hw;
                 Object.assign(base, { unit: "", expr: "" });
@@ -146,7 +151,7 @@ function ChannelForm({
               setC(base);
             }}
           >
-            {["analog_in", "thermocouple_k", "valve", "spark", "derived"].map((k) => (
+            {["analog_in", "thermocouple_k", "valve", "igniter", "derived"].map((k) => (
               <option key={k}>{k}</option>
             ))}
           </select>
@@ -255,7 +260,7 @@ function ChannelForm({
             </select>
           </div>
         )}
-        {c.kind === "spark" && (
+        {c.kind === "igniter" && (
           <div className="modal-row">
             <span style={{ width: 70 }}>max on ms</span>
             {inp(c.max_on_ms, (s) => upd({ max_on_ms: parseInt(s) || 0 }), 80)}

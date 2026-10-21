@@ -2,7 +2,7 @@
 // dashboard, editor page, selected run and overlays — so a pasted link
 // reproduces the same view on another machine in the control room.
 //
-//   #v=dashboard&d=hotfire_main&r=<run_id>&o=<id1>,<id2>
+//   #v=dashboard&d=main&r=<run_id>&o=<id1>,<id2>
 
 import { fetchDashboard, fetchRuns } from "./api";
 import { useStore } from "./store";

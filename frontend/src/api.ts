@@ -1,4 +1,11 @@
-import type { ChannelInfo, DashboardConfig, EventRecord, NodeStatus, RunMeta } from "./types";
+import type {
+  ChannelInfo,
+  DashboardConfig,
+  EventRecord,
+  NodeStatus,
+  Outcome,
+  RunMeta,
+} from "./types";
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -91,6 +98,8 @@ export interface BoundCfg {
 export interface SequenceConfig {
   name: string;
   description: string;
+  /** hopper-test-lab test type of runs that fire this sequence */
+  test_type?: "engine" | "igniter" | "cold_flow" | null;
   max_duration_s: number;
   preconditions: BoundCfg[];
   steps: SeqStepCfg[];
@@ -161,6 +170,10 @@ export const fetchRunEvents = (runId: string) =>
   get<{ events: EventRecord[] }>(`/api/runs/${runId}/events`);
 export const runCsvUrl = (runId: string, tags: string[]) =>
   `/api/runs/${runId}/export.csv?tags=${encodeURIComponent(tags.join(","))}`;
+/** Whole run in hopper-test-lab's import format (docs/hopper-test-lab.md). */
+export const runHopperCsvUrl = (runId: string) => `/api/runs/${runId}/export/hopper.csv`;
+export const runHopperMapUrl = (runId: string) =>
+  `/api/runs/${runId}/export/hopper-channel-map.json`;
 
 export interface ChecklistState {
   name: string;
@@ -208,7 +221,7 @@ export const rerunRunReport = (runId: string) =>
 
 export const patchRunMeta = async (
   runId: string,
-  body: { tags?: string[]; outcome?: "good" | "anomaly" | "scrub"; clear_outcome?: boolean },
+  body: { tags?: string[]; outcome?: Outcome; clear_outcome?: boolean },
 ) => {
   const r = await fetch(`/api/runs/${runId}/meta`, {
     method: "PATCH",

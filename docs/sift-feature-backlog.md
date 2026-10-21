@@ -1,7 +1,7 @@
 # Sift feature survey → ranked tbctl backlog
 
 Survey of the Sift platform (siftstack.com, docs.siftstack.com, github.com/sift-stack,
-August 2026), filtered through what actually helps a single GH2/GOX testbench with a
+August 2026), filtered through what actually helps a single engine testbench with a
 small team. Ranking weighs test-day/review value against implementation cost on our
 stack (FastAPI + HDF5 + uPlot; no cloud, runs on a bench Pi).
 

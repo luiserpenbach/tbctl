@@ -58,7 +58,7 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
     const active = liveValve(el.channel);
     const c = byTag.get(el.channel);
     const action =
-      c?.kind === "spark" ? (active ? "off" : "on") : active ? "close" : "open";
+      c?.kind === "igniter" ? (active ? "off" : "on") : active ? "close" : "open";
     if (pending?.id === el.id) {
       setPending(null);
       setErr("");
@@ -75,7 +75,7 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
       <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
         <PidStage
           cfg={cfg}
-          valveKind={(tag) => (byTag.get(tag)?.kind === "spark" ? "spark" : "valve")}
+          valveKind={(tag) => (byTag.get(tag)?.kind === "igniter" ? "igniter" : "valve")}
           liveValve={liveValve}
           liveValue={(tag) => buffers.latest(tag)}
           staleOf={(tag) => buffers.isStale(tag)}

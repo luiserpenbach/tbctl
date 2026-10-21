@@ -27,7 +27,7 @@ def chmap(channels: list[dict], **overrides) -> ChannelMap:
 
 AIN = {"tag": "pressure.chamber", "hw": "AIN0", "kind": "analog_in", "unit": "bar"}
 VALVE = {"tag": "valve.ox_main", "hw": "FIO0", "kind": "valve", "fail_safe": "closed"}
-SPARK = {"tag": "spark.igniter", "hw": "FIO6", "kind": "spark", "fail_safe": "off"}
+IGNITER = {"tag": "igniter.main", "hw": "FIO6", "kind": "igniter", "fail_safe": "off"}
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ SPARK = {"tag": "spark.igniter", "hw": "FIO6", "kind": "spark", "fail_safe": "of
 
 
 def test_minimal_valid_map():
-    m = chmap([AIN, VALVE, SPARK])
+    m = chmap([AIN, VALVE, IGNITER])
     assert m.by_tag("valve.ox_main").hw == "FIO0"
 
 
@@ -145,7 +145,7 @@ def test_safe_word_and_polarity():
                 "fail_safe": "closed",
                 "open_state": "low",
             },  # closed = level 1
-            SPARK,  # FIO6, off = level 0
+            IGNITER,  # FIO6, off = level 0
         ]
     )
     assert m.safe_word() == 0b0000_0100  # only valve.odd sits high when safe
@@ -154,10 +154,10 @@ def test_safe_word_and_polarity():
 
 
 def test_bit_index_by_dio_number():
-    m = chmap([{**VALVE, "hw": "EIO2"}, SPARK])
+    m = chmap([{**VALVE, "hw": "EIO2"}, IGNITER])
     assert m.bit_index("valve.ox_main") == 10
-    assert m.bit_index("spark.igniter") == 6
-    assert [c.tag for c in m.outputs()] == ["spark.igniter", "valve.ox_main"]
+    assert m.bit_index("igniter.main") == 6
+    assert [c.tag for c in m.outputs()] == ["igniter.main", "valve.ox_main"]
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +236,9 @@ def test_redlines_typed():
 
 
 def test_cross_validation():
-    m = chmap([AIN, VALVE, SPARK])
+    m = chmap([AIN, VALVE, IGNITER])
     good = seq(
-        [{"t": 0.0, "set": {"valve.ox_main": "open", "spark.igniter": "on"}}],
+        [{"t": 0.0, "set": {"valve.ox_main": "open", "igniter.main": "on"}}],
         preconditions=[{"tag": "pressure.chamber", "min": 1.0}],
     )
     assert cross_validate_sequence(good, m) == []
@@ -247,13 +247,15 @@ def test_cross_validation():
         [
             {
                 "t": 0.0,
-                "set": {"valve.nope": "open", "pressure.chamber": "open", "spark.igniter": "open"},
+                "set": {"valve.nope": "open", "pressure.chamber": "open", "igniter.main": "open"},
             }
         ],
         preconditions=[{"tag": "valve.ox_main", "min": 1.0}],
     )
     errors = cross_validate_sequence(bad, m)
-    assert len(errors) == 4  # unknown tag, input as output, bad spark value, output as precondition
+    assert (
+        len(errors) == 4
+    )  # unknown tag, input as output, bad igniter value, output as precondition
 
 
 # ---------------------------------------------------------------------------

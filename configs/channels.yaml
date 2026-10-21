@@ -1,16 +1,25 @@
-# Example channel map for the GH2/GOX thruster bench (spec §4.1).
+# EXAMPLE channel map (spec §4.1): a generic bipropellant engine bench used
+# by the simulator and the tests. Replace it with the real Hopper vehicle /
+# Aldenhoven stand channel list before hardware tests (see TODO.md).
+#
+# Conventions shared with hopper-test-lab (docs/hopper-test-lab.md):
+#   tag   stable ID, `quantity.location`; becomes the hopper "DAQ ID"
+#   name  P&ID / display name (PT-CC-01, ...); becomes the hopper channel name
+#   unit  pressures in bar, temperatures degC (exported as °C), flows in g/s
 device:
   ip: 192.168.10.20
   connection: ethernet   # "usb" for laptop bench testing (ip then ignored)
   watchdog_timeout_s: 5
+  record_outputs: true   # stream FIO_EIO_STATE -> valve/igniter 0/1 channels
 
 rate_groups:
   default: {rate_hz: 50}
-  fast:    {rate_hz: 1000}   # reserved for future 1 kHz chamber PT
+  fast:    {rate_hz: 1000}   # for a 1 kHz chamber PT (combustion stability)
 
 channels:
   # ---- pressures (0-5 V transducers, engineering units via polynomial) ----
   - tag: pressure.chamber
+    name: PT-CC-01
     hw: AIN0
     kind: analog_in
     unit: bar
@@ -18,6 +27,7 @@ channels:
     cal: {kind: polynomial, coeffs: [0.0, 25.0]}
     rate_group: default
   - tag: pressure.ox_manifold
+    name: PT-OX-02
     hw: AIN1
     kind: analog_in
     unit: bar
@@ -25,6 +35,7 @@ channels:
     cal: {kind: polynomial, coeffs: [0.0, 25.0]}
     rate_group: default
   - tag: pressure.fuel_manifold
+    name: PT-FU-02
     hw: AIN2
     kind: analog_in
     unit: bar
@@ -32,6 +43,7 @@ channels:
     cal: {kind: polynomial, coeffs: [0.0, 25.0]}
     rate_group: default
   - tag: pressure.n2_purge
+    name: PT-N2-01
     hw: AIN3
     kind: analog_in
     unit: bar
@@ -39,6 +51,7 @@ channels:
     cal: {kind: linear, gain: 40.0, offset: -0.5}
     rate_group: default
   - tag: pressure.ox_tank
+    name: PT-OX-01
     hw: AIN4
     kind: analog_in
     unit: bar
@@ -46,6 +59,7 @@ channels:
     cal: {kind: polynomial, coeffs: [0.0, 60.0]}
     rate_group: default
   - tag: pressure.fuel_tank
+    name: PT-FU-01
     hw: AIN5
     kind: analog_in
     unit: bar
@@ -55,11 +69,13 @@ channels:
 
   # ---- temperatures ----
   - tag: temp.injector
+    name: TC-INJ-01
     hw: AIN48          # Mux80 extended channel
     kind: thermocouple_k
     unit: degC
     rate_group: default
   - tag: temp.chamber_wall
+    name: TC-CC-01
     hw: AIN49
     kind: thermocouple_k
     unit: degC
@@ -67,6 +83,7 @@ channels:
 
   # ---- load ----
   - tag: force.thrust
+    name: LC-01
     hw: AIN6
     kind: analog_in
     unit: N
@@ -76,49 +93,58 @@ channels:
 
   # ---- valves (driver board on DIO; energized = open unless noted) ----
   - tag: valve.ox_main
+    name: V-OX-01
     hw: FIO0
     kind: valve
     fail_safe: closed
     open_state: high
   - tag: valve.fuel_main
+    name: V-FU-01
     hw: FIO1
     kind: valve
     fail_safe: closed
     open_state: high
   - tag: valve.ox_vent
+    name: V-OX-VENT
     hw: FIO2
     kind: valve
     fail_safe: open      # NC vent: de-energized = open = safe
     open_state: low
   - tag: valve.fuel_vent
+    name: V-FU-VENT
     hw: FIO3
     kind: valve
     fail_safe: open
     open_state: low
   - tag: valve.purge
+    name: V-N2-01
     hw: FIO4
     kind: valve
     fail_safe: closed
     open_state: high
   - tag: valve.ox_pre
+    name: V-OX-PRE
     hw: FIO5
     kind: valve
     fail_safe: closed
     open_state: high
 
-  # ---- igniter ----
-  - tag: spark.igniter
+  # ---- igniter (spark exciter, glow plug, torch: any timed on/off output) ----
+  - tag: igniter.main
+    name: IGN-01
     hw: FIO6
-    kind: spark
+    kind: igniter
     fail_safe: off
     max_on_ms: 2000      # D9 guard, compiled into upload header
 
   # ---- calculated channels (derived signals, computed on the host) ----
   - tag: calc.dp_ox_inj
+    name: DP-OX-INJ
     kind: derived
     unit: bar
     expr: pressure.ox_manifold - pressure.chamber
   - tag: calc.dp_fuel_inj
+    name: DP-FU-INJ
     kind: derived
     unit: bar
     expr: pressure.fuel_manifold - pressure.chamber

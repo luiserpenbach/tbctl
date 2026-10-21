@@ -21,13 +21,13 @@ def test_yaml_on_off_stay_strings(tmp_path):
     p = tmp_path / "seq.yaml"
     p.write_text(
         "name: s\nmax_duration_s: 5.0\n"
-        "steps:\n  - {t: 0.0, set: {spark.igniter: on}}\n"
-        "  - {t: 1.0, set: {spark.igniter: off}}\n"
-        "abort:\n  - {t: 0.0, set: {spark.igniter: off}}\n"
+        "steps:\n  - {t: 0.0, set: {igniter.main: on}}\n"
+        "  - {t: 1.0, set: {igniter.main: off}}\n"
+        "abort:\n  - {t: 0.0, set: {igniter.main: off}}\n"
     )
     seq = load_sequence(p).model
-    assert seq.steps[0].set["spark.igniter"] == "on"
-    assert seq.steps[1].set["spark.igniter"] == "off"
+    assert seq.steps[0].set["igniter.main"] == "on"
+    assert seq.steps[1].set["igniter.main"] == "off"
 
 
 def test_true_false_still_booleans(tmp_path):
@@ -50,7 +50,7 @@ def test_example_config_dir_loads():
     bundle = load_config_dir(CONFIGS)
     assert "hotfire_v1" in bundle.sequences
     assert "coldflow_v1" in bundle.sequences
-    assert "hotfire_main" in bundle.dashboards
+    assert "main" in bundle.dashboards
     assert bundle.channels.model.safe_word() is not None
 
 

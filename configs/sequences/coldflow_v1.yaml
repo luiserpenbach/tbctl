@@ -1,6 +1,7 @@
-# 3 s ox-side cold flow with N2 pre/post purge.
+# EXAMPLE 3 s ox-side cold flow with N2 pre/post purge.
 name: coldflow_v1
 description: Ox-side cold flow, 3 s, N2 purge before and after
+test_type: cold_flow
 max_duration_s: 12.0
 preconditions:
   - {tag: pressure.n2_purge, min: 8.0}

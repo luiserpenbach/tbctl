@@ -69,7 +69,8 @@ async def test_stream_runs_at_max_group_rate(rig):
     assert set(acq.rings) == {"default", "fast"}
     assert acq.rings["fast"].rate_hz == 1000
     assert acq.rings["default"].rate_hz == 50
-    assert acq.rings["fast"].tags == ["pressure.chamber"]
+    # outputs ride along in the fastest group as 0/1 state channels
+    assert acq.rings["fast"].tags == ["pressure.chamber", "valve.ox_main"]
     assert sorted(acq.rings["default"].tags) == ["pressure.ox_manifold", "temp.injector"]
 
 

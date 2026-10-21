@@ -32,7 +32,7 @@ class ConfigError(Exception):
 class _YamlLoader(yaml.SafeLoader):
     """SafeLoader minus YAML 1.1's on/off/yes/no booleans.
 
-    Operators write `fail_safe: off` and `spark.igniter: on`; those must stay
+    Operators write `fail_safe: off` and `igniter.main: on`; those must stay
     strings. Only true/false (any case) remain booleans.
     """
 

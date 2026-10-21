@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="monospace">
-  <!-- GH2/GOX feed-system P&ID background. Static plumbing only: live
+  <!-- EXAMPLE biprop feed-system P&ID background. Static plumbing only: live
        valves/sensors are overlaid by the pid panel at normalized coords. -->
   <defs>
     <marker id="arr" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto">
@@ -43,8 +43,8 @@
   </g>
   <g fill="#7a8699" font-size="17">
     <text x="500" y="105" text-anchor="middle">N2</text>
-    <text x="115" y="280" text-anchor="middle">GOX</text>
-    <text x="885" y="280" text-anchor="middle">GH2</text>
+    <text x="115" y="280" text-anchor="middle">OX</text>
+    <text x="885" y="280" text-anchor="middle">FUEL</text>
     <text x="500" y="615" text-anchor="middle" font-size="14">thrust</text>
   </g>
 </svg>

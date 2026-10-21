@@ -9,7 +9,7 @@ export function ValvePanel() {
   const seq = useStore((s) => s.seqStatus);
   const channels = useStore((s) => s.channels);
   const [err, setErr] = useState("");
-  const outputs = channels.filter((c) => c.kind === "valve" || c.kind === "spark");
+  const outputs = channels.filter((c) => c.kind === "valve" || c.kind === "igniter");
 
   if (!status) return <div className="placeholder">waiting for status…</div>;
 

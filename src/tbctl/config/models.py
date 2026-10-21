@@ -61,6 +61,10 @@ class DeviceConfig(StrictModel):
     # "usb" (bench/laptop testing, ignores `ip`), or "any" (first T7 found).
     connection: Literal["ethernet", "usb", "any"] = "ethernet"
     watchdog_timeout_s: int = Field(ge=1, le=60)
+    # Stream FIO_EIO_STATE alongside the analog inputs and record every
+    # output (valve / igniter) as a 0/1 channel (1 = open / on) in the
+    # fastest rate group. hopper-test-lab times ignition from these edges.
+    record_outputs: bool = True
 
     def ljm_open_args(self) -> tuple[str, str]:
         """(connection_type, identifier) for LJM openS."""
@@ -111,6 +115,9 @@ Cal = Annotated[PolynomialCal | LinearCal | TableCal, Field(discriminator="kind"
 
 class AnalogInChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
     kind: Literal["analog_in"]
     unit: str
@@ -129,6 +136,9 @@ class AnalogInChannel(StrictModel):
 
 class ThermocoupleChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
     kind: Literal["thermocouple_k"]
     unit: Literal["degC", "K", "degF"] = "degC"
@@ -144,6 +154,9 @@ class ThermocoupleChannel(StrictModel):
 
 class ValveChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
     kind: Literal["valve"]
     fail_safe: Literal["closed", "open"]
@@ -156,10 +169,13 @@ class ValveChannel(StrictModel):
         return v
 
 
-class SparkChannel(StrictModel):
+class IgniterChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
-    kind: Literal["spark"]
+    kind: Literal["igniter"]
     fail_safe: Literal["off"]
     on_state: Literal["high", "low"] = "high"
     max_on_ms: int = Field(default=2000, ge=1, le=60000)  # D9 guard
@@ -179,6 +195,9 @@ class DerivedChannel(StrictModel):
     are sample-and-hold)."""
 
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     kind: Literal["derived"]
     unit: str = ""
     expr: str
@@ -196,11 +215,11 @@ class DerivedChannel(StrictModel):
 
 
 Channel = Annotated[
-    AnalogInChannel | ThermocoupleChannel | ValveChannel | SparkChannel | DerivedChannel,
+    AnalogInChannel | ThermocoupleChannel | ValveChannel | IgniterChannel | DerivedChannel,
     Field(discriminator="kind"),
 ]
 
-OutputChannel = ValveChannel | SparkChannel
+OutputChannel = ValveChannel | IgniterChannel
 InputChannel = AnalogInChannel | ThermocoupleChannel
 
 _TAG_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)+$")
@@ -219,6 +238,9 @@ class ChannelMap(StrictModel):
         for t in tags:
             if not _TAG_RE.match(t):
                 raise ValueError(f"tag {t!r} must be dotted lowercase (e.g. pressure.chamber)")
+        names = [c.name for c in self.channels if c.name]
+        if dupes := {n for n in names if names.count(n) > 1}:
+            raise ValueError(f"duplicate channel names: {sorted(dupes)}")
         hws = [c.hw for c in self.channels if not isinstance(c, DerivedChannel)]
         if dupes := {h for h in hws if hws.count(h) > 1}:
             raise ValueError(f"duplicate hw assignments: {sorted(dupes)}")
@@ -290,13 +312,13 @@ class ChannelMap(StrictModel):
         raise KeyError(f"unknown channel tag {tag!r}")
 
     def active_level(self, c: OutputChannel) -> int:
-        """Electrical level (0/1) meaning 'open' (valve) / 'on' (spark)."""
+        """Electrical level (0/1) meaning 'open' (valve) / 'on' (igniter)."""
         pol = c.open_state if isinstance(c, ValveChannel) else c.on_state
         return 1 if pol == "high" else 0
 
     def safe_level(self, c: OutputChannel) -> int:
         """Electrical level of the fail-safe state."""
-        # spark fail_safe is always 'off'; only a valve can fail to its active state
+        # igniter fail_safe is always 'off'; only a valve can fail to its active state
         active = isinstance(c, ValveChannel) and c.fail_safe == "open"
         return self.active_level(c) if active else 1 - self.active_level(c)
 
@@ -316,8 +338,8 @@ class ChannelMap(StrictModel):
         """§5 header field: bits NOT controlled by the sequencer (16-bit)."""
         return (~self.controlled_mask()) & 0xFFFF
 
-    def spark_channels(self) -> list[SparkChannel]:
-        return [c for c in self.channels if isinstance(c, SparkChannel)]
+    def igniter_channels(self) -> list[IgniterChannel]:
+        return [c for c in self.channels if isinstance(c, IgniterChannel)]
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +351,10 @@ MIN_STEP_SPACING_S = 0.002
 _EPS = 1e-9
 
 StepValue = Literal["open", "close", "on", "off"]
+
+# hopper-test-lab test types (TestType there); stamped on runs that fire the
+# sequence so the analysis side knows which kind of test it is.
+TestType = Literal["engine", "igniter", "cold_flow"]
 
 
 class Precondition(StrictModel):
@@ -391,6 +417,7 @@ def _check_steps(steps: list[SeqStep], what: str, max_duration_s: float | None) 
 class Sequence(StrictModel):
     name: str
     description: str = ""
+    test_type: TestType | None = None  # None = not a test (e.g. timing check)
     max_duration_s: float = Field(gt=0, le=600)
     preconditions: list[Precondition] = []
     steps: list[SeqStep] = Field(min_length=1)
@@ -415,7 +442,7 @@ class Sequence(StrictModel):
 def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
     """Channel-map-dependent checks (§4.2). Returns a list of error strings.
 
-    Word-expansion rules (carry-forward, unsafe-end, static spark on-time)
+    Word-expansion rules (carry-forward, unsafe-end, static igniter on-time)
     are enforced by the step-table compiler, which reuses these checks first.
     """
     errors: list[str] = []
@@ -430,8 +457,8 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
                 ch = chmap.by_tag(tag)
                 if isinstance(ch, ValveChannel) and value not in ("open", "close"):
                     errors.append(f"{what}[{i}]: valve {tag!r} takes open/close, got {value!r}")
-                if isinstance(ch, SparkChannel) and value not in ("on", "off"):
-                    errors.append(f"{what}[{i}]: spark {tag!r} takes on/off, got {value!r}")
+                if isinstance(ch, IgniterChannel) and value not in ("on", "off"):
+                    errors.append(f"{what}[{i}]: igniter {tag!r} takes on/off, got {value!r}")
     for i, pre in enumerate(seq.preconditions):
         if pre.tag not in input_tags:
             errors.append(f"preconditions[{i}]: {pre.tag!r} is not an input channel")
@@ -513,7 +540,7 @@ _ASSET_RE = re.compile(r"^[a-zA-Z0-9_\-]+\.svg$")
 class PidValveElement(StrictModel):
     id: str
     type: Literal["valve"]
-    channel: str  # must be an output channel (valve or spark)
+    channel: str  # must be an output channel (valve or igniter)
     x: float = Field(ge=0, le=1)
     y: float = Field(ge=0, le=1)
     size: float = Field(default=0.05, gt=0, le=0.5)  # fraction of canvas width
