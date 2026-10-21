@@ -1,11 +1,13 @@
-# Pre-fire procedural checklist (roadmap phase 15). Checking items logs
-# events; completion is shown next to ARM but never blocks anything.
+# EXAMPLE pre-fire procedural checklist (roadmap phase 15). Checking items
+# logs events; completion is shown next to ARM but never blocks anything.
+# Replace with the Hopper / Aldenhoven test procedure (TODO.md).
 name: pre_fire
 items:
-  - Test cell clear, doors closed, warning light on
-  - Camera + DAQ recording armed
+  - Test area clear, access closed, warning light on
+  - Cameras + DAQ recording armed
+  - H2 gas detection active, no alarms
   - N2 purge bottle open, regulator at 10 bar
-  - OX and fuel tank pressures nominal
+  - Oxidizer and fuel tank pressures nominal
   - Vent valves confirmed OPEN (fail-safe state)
   - Igniter continuity checked
   - Sequence loaded and compile report reviewed

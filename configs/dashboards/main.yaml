@@ -1,0 +1,11 @@
+# Default dashboard (spec §4.3 example).
+name: main
+grid: {cols: 12, row_height_px: 40}
+panels:
+  - {id: p1, type: timeseries, x: 0, y: 0, w: 8, h: 9,
+     channels: [pressure.chamber, pressure.ox_manifold, pressure.fuel_manifold],
+     y_axis: {mode: auto}}
+  - {id: p2, type: value_table, x: 8, y: 0, w: 4, h: 6, channels: ["pressure.*", "temp.*"]}
+  - {id: p3, type: valve_panel, x: 8, y: 6, w: 4, h: 9}
+  - {id: p4, type: sequence_panel, x: 0, y: 9, w: 5, h: 6}
+  - {id: p5, type: recorder_panel, x: 5, y: 9, w: 3, h: 6}

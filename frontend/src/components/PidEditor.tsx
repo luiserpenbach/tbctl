@@ -21,7 +21,7 @@ import { PidStage } from "./pid/PidStage";
 export function PidEditor() {
   const channels = useStore((s) => s.channels);
   const outputs = useMemo(
-    () => channels.filter((c) => c.kind === "valve" || c.kind === "spark"),
+    () => channels.filter((c) => c.kind === "valve" || c.kind === "igniter"),
     [channels],
   );
   const inputs = useMemo(
@@ -205,7 +205,7 @@ export function PidEditor() {
             <PidStage
               cfg={cfg}
               valveKind={(tag) =>
-                channels.find((c) => c.tag === tag)?.kind === "spark" ? "spark" : "valve"
+                channels.find((c) => c.tag === tag)?.kind === "igniter" ? "igniter" : "valve"
               }
               liveValve={() => false}
               liveValue={() => null}

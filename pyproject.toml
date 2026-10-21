@@ -1,7 +1,7 @@
 [project]
 name = "tbctl"
 version = "0.1.0"
-description = "Testbench control software: DAQ + valve control + deterministic sequencing for GH2/GOX thruster testing"
+description = "Hopper test and mission control: DAQ + valve control + deterministic sequencing on a LabJack T7"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.7",

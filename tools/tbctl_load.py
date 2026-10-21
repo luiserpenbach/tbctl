@@ -9,6 +9,7 @@ Usage:
     run.meta["operator"], run.meta["tags"]
     t = run.groups["default"]["t"]              # epoch seconds (f8)
     pc = run.groups["default"]["pressure.chamber"]
+    run.groups["default"]["valve.ox_main"]       # outputs: 0/1 open (schema >= 2)
     run.events                                   # list of dicts (JSONL mirror)
     run.report                                   # post-run review report or None
     run.annotations                              # review annotations (sidecar)
@@ -71,6 +72,10 @@ def load_run(path: str | Path) -> Run:
             with contextlib.suppress(Exception):
                 meta.update(json.loads(raw))
         meta.setdefault("tags", [])
+        # outcomes follow hopper-test-lab (pass/anomaly/fail/void); old files: good/scrub
+        meta["outcome"] = {"good": "pass", "scrub": "void"}.get(
+            meta.get("outcome"), meta.get("outcome")
+        )
 
         groups: dict[str, dict[str, np.ndarray]] = {}
         for name in f["groups"]:

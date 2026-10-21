@@ -39,8 +39,8 @@ def table(chmap, steps=None, abort=None, guard=2000) -> StepTable:
     return StepTable(
         dio_inhibit=chmap.dio_inhibit(),
         safe_word=safe,
-        spark_guard_ms=guard,
-        spark_mask=1 << 6,  # spark.igniter on FIO6
+        igniter_guard_ms=guard,
+        igniter_mask=1 << 6,  # igniter.main on FIO6
         steps=tuple(steps or [Step(0, 0x0001), Step(50, 0x0003), Step(100, safe)]),
         abort=tuple(abort or [Step(0, safe), Step(20, safe)]),
     )
@@ -158,10 +158,10 @@ def test_heartbeat_loss_while_armed_aborts(rig):
     assert error(mock) == SeqError.HB_TIMEOUT
 
 
-def test_spark_guard_trips(rig):
+def test_igniter_guard_trips(rig):
     mock, clock, chmap = rig
     safe = chmap.safe_word()
-    # spark (bit 6) on at t=0 and never turned off before the 100 ms guard
+    # igniter (bit 6) on at t=0 and never turned off before the 100 ms guard
     t = table(
         chmap,
         steps=[Step(0, 1 << 6), Step(5000, safe)],
@@ -177,8 +177,8 @@ def test_spark_guard_trips(rig):
     clock.advance(0.100)
     beat(mock)
     assert state(mock) in (SeqState.ABORTING, SeqState.ABORTED)
-    assert error(mock) == SeqError.SPARK_GUARD
-    assert not mock.dio_word16() & (1 << 6)  # spark forced low immediately
+    assert error(mock) == SeqError.IGNITER_GUARD
+    assert not mock.dio_word16() & (1 << 6)  # igniter forced low immediately
     clock.advance(0.1)
     beat(mock)
     assert state(mock) == SeqState.ABORTED

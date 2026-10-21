@@ -121,7 +121,7 @@ export function DashboardGrid() {
           <div className="panel">
             <div className="panel-header">
               <span className="drag-handle">{p.title || PANEL_TITLES[p.type] || p.type}</span>
-              <span>{p.id}</span>
+              <span>{p.id.toUpperCase()}</span>
               {editMode && (
                 <>
                   <button className="panel-btn" title="configure" onClick={() => setModal(p)}>

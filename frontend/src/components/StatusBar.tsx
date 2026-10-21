@@ -1,7 +1,106 @@
 import { useEffect, useState } from "react";
-import { fetchStatus, saveDashboard, setControlMode } from "../api";
+import { abortSequence, fetchStatus, saveDashboard, setControlMode } from "../api";
 import { useStore } from "../store";
 import { ConnectionModal } from "./ConnectionModal";
+
+type View = "dashboard" | "channels" | "sequences" | "pid";
+const NAV: [View, string][] = [
+  ["dashboard", "Dashboard"],
+  ["channels", "Channels"],
+  ["sequences", "Sequences"],
+  ["pid", "P&ID"],
+];
+
+// annunciator colour per sequencer state
+const SEQ_TONE: Record<string, string> = {
+  LOADED: "info",
+  ARMED: "warn",
+  RUNNING: "ok",
+  DONE: "ok",
+  ABORTING: "bad",
+  ABORTED: "bad",
+  FAULT: "bad",
+};
+
+const pad = (n: number, w = 2) => String(Math.floor(n)).padStart(w, "0");
+const hms = (s: number) => `${pad(s / 3600)}:${pad((s % 3600) / 60)}:${pad(s % 60)}`;
+const mmss = (ms: number) => `${pad(ms / 60000)}:${pad((ms % 60000) / 1000)}.${pad((ms % 1000) / 10)}`;
+
+function HopperMark() {
+  // lander silhouette: body, legs, feet and a plume
+  return (
+    <svg className="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="7.5" y="3.5" width="9" height="8" rx="2.5" />
+      <path d="M10 7.5h4" opacity="0.55" />
+      <path d="M8.5 11.5 4.5 18.5M15.5 11.5l4 7M2.8 18.5h3.4M17.8 18.5h3.4M12 11.5v1.5" />
+      <path d="M10.5 13.5h3L12 21z" fill="currentColor" stroke="none" opacity="0.55" />
+    </svg>
+  );
+}
+
+function MissionClock() {
+  const seq = useStore((s) => s.seqStatus);
+  const status = useStore((s) => s.status);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const iv = setInterval(() => setNow(new Date()), 250);
+    return () => clearInterval(iv);
+  }, []);
+
+  const utc = now.toISOString().slice(11, 19);
+  const state = seq?.state ?? status?.sequencer.state ?? "";
+  const rec = status?.recording;
+
+  let cell = { cls: "", label: "Local", value: now.toLocaleTimeString(undefined, { hour12: false }) };
+  if (state === "RUNNING") cell = { cls: "t-plus", label: "T+ fire", value: mmss(seq?.elapsed_ms ?? 0) };
+  else if (state === "ABORTING") cell = { cls: "abort", label: "Abort", value: mmss(seq?.elapsed_ms ?? 0) };
+  else if (state === "ARMED") cell = { cls: "armed", label: "Armed", value: "T− HOLD" };
+  else if (rec?.active && rec.t_start)
+    cell = { cls: "rec", label: "Rec", value: hms(Math.max(0, now.getTime() / 1000 - rec.t_start)) };
+
+  return (
+    <div className="mission-clock" title="mission clock">
+      <div className="clock-cell utc">
+        <span className="clock-label">UTC</span>
+        <span className="clock-value">{utc}</span>
+      </div>
+      <div className={`clock-cell ${cell.cls || "local"}`}>
+        <span className="clock-label">{cell.label}</span>
+        <span className="clock-value">{cell.value}</span>
+      </div>
+    </div>
+  );
+}
+
+function Ann({
+  k,
+  v,
+  tone = "",
+  onClick,
+  title,
+}: {
+  k: string;
+  v: string;
+  tone?: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`ann ${tone} ${onClick ? "clickable" : ""}`}
+      onClick={onClick}
+      title={title}
+      tabIndex={onClick ? 0 : -1}
+    >
+      <span className="ann-key">{k}</span>
+      <span className="ann-val">
+        <span className="led" />
+        {v}
+      </span>
+    </button>
+  );
+}
 
 export function StatusBar() {
   const status = useStore((s) => s.status);
@@ -27,66 +126,67 @@ export function StatusBar() {
   const hbFresh = wsConnected && Date.now() - lastSeqAt < 2000;
   const seqState = seq?.state ?? status?.sequencer.state ?? "—";
   const recording = status?.recording.active ?? false;
+  const control = status?.control_enabled ?? false;
+  const mode = status?.device.mode ?? "t7";
+  const deviceLabel = !deviceOk ? "Lost" : mode === "ethernet" ? status?.device.ip ?? "ETH" : mode;
+
+  const toggleControl = () =>
+    setControlMode(!control).then(() => fetchStatus().then((s) => useStore.getState().setStatus(s)));
 
   return (
     <header className="statusbar">
-      <button className="btn" onClick={toggleSidebar} title="toggle sidebar">☰</button>
-      <span className="brand">TBCTL</span>
-      <button
-        className={`btn ${view === "dashboard" ? "active" : ""}`}
-        onClick={() => setView("dashboard")}
-      >
-        Dashboard
+      <button className="icon-btn" onClick={toggleSidebar} title="toggle sidebar" aria-label="toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+          <path d="M9 4.5v15" />
+        </svg>
       </button>
-      <button
-        className={`btn ${view === "channels" ? "active" : ""}`}
-        onClick={() => setView("channels")}
-      >
-        Channels
-      </button>
-      <button
-        className={`btn ${view === "sequences" ? "active" : ""}`}
-        onClick={() => setView("sequences")}
-      >
-        Sequences
-      </button>
-      <button className={`btn ${view === "pid" ? "active" : ""}`} onClick={() => setView("pid")}>
-        P&amp;ID
-      </button>
-      <span className="chip">{dashboard?.name ?? "no dashboard"}</span>
-      {status?.device.sim && <span className="chip warn"><span className="dot" />SIM</span>}
+      <div className="brand">
+        <HopperMark />
+        <div className="brand-text">
+          <span className="brand-name">HOPPER</span>
+          <span className="brand-sub">Test &amp; mission control</span>
+        </div>
+      </div>
+      <nav className="nav">
+        {NAV.map(([v, label]) => (
+          <button key={v} className={`nav-btn ${view === v ? "active" : ""}`} onClick={() => setView(v)}>
+            {label}
+          </button>
+        ))}
+      </nav>
       <span className="spacer" />
-      <span
-        className={`chip ${deviceOk ? "ok" : "bad"}`}
-        style={{ cursor: "pointer" }}
-        title="connection settings"
-        onClick={() => setConnOpen(true)}
-      >
-        <span className="dot" />
-        {(status?.device.mode ?? "T7").toUpperCase()} {status?.device.mode === "ethernet" ? status?.device.ip : ""}
-      </span>
+      <MissionClock />
+      <div className="annunciators">
+        {status?.device.sim && <Ann k="Mode" v="Sim" tone="warn" title="simulator: no hardware" />}
+        <Ann
+          k="T7"
+          v={deviceLabel}
+          tone={deviceOk ? "ok" : "bad"}
+          onClick={() => setConnOpen(true)}
+          title="connection settings"
+        />
+        <Ann k="Link" v={hbFresh ? "Up" : "Down"} tone={hbFresh ? "ok" : "bad"} />
+        <Ann k="Seq" v={seqState} tone={SEQ_TONE[seqState] ?? ""} />
+        <Ann k="Rec" v={recording ? "Rec" : "Off"} tone={recording ? "rec" : ""} />
+        <Ann
+          k="Control"
+          v={control ? "Live" : "Safe"}
+          tone={control ? "warn" : ""}
+          onClick={toggleControl}
+          title="gates manual valves and ARM — click to toggle"
+        />
+      </div>
+      {(seqState === "ARMED" || seqState === "RUNNING") && (
+        // always on screen while it matters, however the dashboard scrolls
+        <button className="bar-abort" onClick={() => abortSequence().catch(() => {})} title="abort (also: Esc Esc)">
+          Abort
+        </button>
+      )}
       {connOpen && <ConnectionModal onClose={() => setConnOpen(false)} />}
-      <span className={`chip ${hbFresh ? "ok" : "bad"}`}>
-        <span className="dot" />{wsConnected ? "LINK" : "NO LINK"}
-      </span>
-      <span className={`chip state-${seqState}`}>SEQ {seqState}</span>
-      <span className={`chip ${recording ? "rec" : ""}`}>
-        <span className="dot" />{recording ? "REC" : "IDLE"}
-      </span>
-      <button
-        className={`btn ${status?.control_enabled ? "danger-active" : ""}`}
-        title="gates manual valves and ARM"
-        onClick={() =>
-          setControlMode(!(status?.control_enabled ?? false)).then(() =>
-            fetchStatus().then((s) => useStore.getState().setStatus(s)),
-          )
-        }
-      >
-        {status?.control_enabled ? "Control on" : "Control off"}
-      </button>
       {editMode && dashboard && (
         <button
-          className="btn"
+          className="btn primary"
           onClick={() =>
             saveDashboard(dashboard.name, dashboard)
               .then(() => setEditMode(false))
@@ -97,10 +197,24 @@ export function StatusBar() {
         </button>
       )}
       <button
-        className={`btn ${editMode ? "active" : ""}`}
+        className={`icon-btn ${editMode ? "active" : ""}`}
         onClick={() => setEditMode(!editMode)}
+        title={editMode ? "done editing" : "edit layout"}
+        aria-label="edit layout"
+        style={editMode ? { color: "var(--accent)", borderColor: "var(--border)" } : undefined}
       >
-        {editMode ? "Done" : "Edit"}
+        {editMode ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m5 12.5 4.5 4.5L19 7.5" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+            <rect x="13.5" y="3.5" width="7" height="4" rx="1.5" />
+            <rect x="13.5" y="10.5" width="7" height="10" rx="1.5" />
+            <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+          </svg>
+        )}
       </button>
     </header>
   );

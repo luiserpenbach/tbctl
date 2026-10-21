@@ -12,22 +12,24 @@ import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
 
-// Sift-like series colors: vivid, high-contrast on black
+// categorical series colours in fixed order (dataviz reference dark steps,
+// validated against the panel surface #0a0e13: CVD + normal-vision + 3:1)
 const PALETTE = [
-  "#3fd158",
-  "#4a9eff",
-  "#e26ee8",
-  "#f0883e",
-  "#e3b341",
-  "#39c5cf",
-  "#f778ba",
-  "#8b949e",
+  "#3987e5",
+  "#d95926",
+  "#199e70",
+  "#c98500",
+  "#d55181",
+  "#008300",
+  "#9085e9",
+  "#e66767",
 ];
+// recessive axes: text ink for labels, near-invisible grid
 const AXIS = {
-  stroke: "#9e9ea4",
+  stroke: "#95a1b3",
   font: "10px 'IBM Plex Mono', monospace",
-  grid: { stroke: "#1b1b1b", width: 1 },
-  ticks: { stroke: "#262626" },
+  grid: { stroke: "rgba(150, 180, 220, 0.06)", width: 1 },
+  ticks: { stroke: "rgba(150, 180, 220, 0.12)" },
 };
 
 const SYNC_KEY = uPlot.sync("tbctl");
@@ -35,9 +37,9 @@ const DEFAULT_WINDOW_S = 60;
 const runShort = (runId: string) => runId.replace(/^\d{8}-/, "");
 
 const SEV_COLOR: Record<Annotation["severity"], string> = {
-  info: "#4a9eff",
-  warn: "#f0883e",
-  crit: "#f0413d",
+  info: "#8ed4ff",
+  warn: "#ffb547",
+  crit: "#ff4f56",
 };
 
 const WINDOW_CHOICES: [number, string][] = [
@@ -58,17 +60,17 @@ interface Marker {
 function toMarker(e: { event: string; time: number; [k: string]: unknown }): Marker | null {
   switch (e.event) {
     case "note":
-      return { t: e.time, letter: "N", color: "#4cc9f0", label: String(e.text ?? "note") };
+      return { t: e.time, letter: "N", color: "#8ed4ff", label: String(e.text ?? "note") };
     case "seq_fired":
-      return { t: e.time, letter: "F", color: "#2ecc71", label: `FIRE ${e.sequence ?? ""}` };
+      return { t: e.time, letter: "F", color: "#3ee08f", label: `FIRE ${e.sequence ?? ""}` };
     case "seq_abort_commanded":
-      return { t: e.time, letter: "A", color: "#e74c3c", label: "abort commanded" };
+      return { t: e.time, letter: "A", color: "#ff4f56", label: "abort commanded" };
     case "seq_terminal":
       return e.state === "ABORTED" || e.state === "FAULT"
-        ? { t: e.time, letter: "A", color: "#e74c3c", label: `${e.state} ${e.error ?? ""}` }
+        ? { t: e.time, letter: "A", color: "#ff4f56", label: `${e.state} ${e.error ?? ""}` }
         : null;
     case "redline_tripped":
-      return { t: e.time, letter: "R", color: "#f1c40f", label: String(e.reason ?? "redline") };
+      return { t: e.time, letter: "R", color: "#ffb547", label: String(e.reason ?? "redline") };
     default:
       return null;
   }
@@ -134,7 +136,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             tags.map((tag, i) => ({
               label: ri === 0 ? tag : `${tag} · ${runShort(run.run_id)}`,
               stroke: PALETTE[i % PALETTE.length],
-              width: ri === 0 ? 1.6 : 1.1,
+              width: ri === 0 ? 2 : 1.25,
               dash: ri === 0 ? undefined : ([6, 4] as number[]),
               alpha: ri === 0 ? 1 : 0.75,
               points: { show: false },
@@ -143,7 +145,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         : tags.map((tag, i) => ({
             label: tag,
             stroke: PALETTE[i % PALETTE.length],
-            width: 1.4,
+            width: 2,
             points: { show: false },
           }));
     const nSeries = seriesDefs.length;

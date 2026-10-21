@@ -34,7 +34,7 @@ local KKEY = {
   v = "INTERP_VERSION",
   m = "ARM_MAGIC",
   h = "DEFAULT_HB_TIMEOUT_MS",
-  g = "DEFAULT_SPARK_GUARD_MS",
+  g = "DEFAULT_IGNITER_GUARD_MS",
   k = "TICK_MS",
   s = "MAX_STEPS",
   p = "MIN_STEP_SPACING_MS",
@@ -48,7 +48,7 @@ local C = {
   ST_IDLE = 0, ST_LOADED = 1, ST_ARMED = 2, ST_RUNNING = 3, ST_DONE = 4,
   ST_ABORTING = 5, ST_ABORTED = 6, ST_FAULT = 7,
   ERR_NONE = 0, ERR_HB_TIMEOUT = 1, ERR_HOST_ABORT = 2, ERR_BAD_TABLE = 3,
-  ERR_SPARK_GUARD = 4, ERR_OVERRUN = 5,
+  ERR_IGNITER_GUARD = 4, ERR_OVERRUN = 5,
 }
 local current = nil
 for line in io.lines("lua/gen/registers_gen.lua") do
@@ -167,7 +167,7 @@ end
 check(getreg(C.ADDR_INTERP_VERSION) == C.INTERP_VERSION, "interp_version published")
 check(getreg(C.ADDR_STATE) == C.ST_IDLE, "starts IDLE")
 
--- Build a minimal valid table: 2 steps, 0 abort, spark_guard=0
+-- Build a minimal valid table: 2 steps, 0 abort, igniter_guard=0
 local function u16le(n)
   return { n % 256, math.floor(n / 256) % 256 }
 end
@@ -370,7 +370,7 @@ check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "armed hb loss -> ABORTED")
 check(getreg(C.ADDR_ERROR_CODE) == C.ERR_HB_TIMEOUT, "armed hb loss error code")
 cmd(C.CMD_RESET)
 
--- spark guard: bit 6 held high past guard -> forced low + abort
+-- igniter guard: bit 6 held high past guard -> forced low + abort
 load_table({
   steps = { { 0, 0x0040 }, { 5000, SAFE } },
   abort = { { 0, SAFE } },
@@ -380,16 +380,16 @@ do_arm(500)
 cmd(C.CMD_FIRE)
 for i = 1, 50 do step(1) end
 beat()
-check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "spark on, pre-guard still running")
+check(getreg(C.ADDR_STATE) == C.ST_RUNNING, "igniter on, pre-guard still running")
 for i = 1, 60 do step(1) end
-check(getreg(C.ADDR_ERROR_CODE) == C.ERR_SPARK_GUARD, "guard trip -> ERR_SPARK_GUARD")
+check(getreg(C.ADDR_ERROR_CODE) == C.ERR_IGNITER_GUARD, "guard trip -> ERR_IGNITER_GUARD")
 local forced_low = false
 for _, w in ipairs(dio_writes) do
   if w.tick > fire_tick and w.value % 128 < 64 then forced_low = true end
 end
-check(forced_low, "spark bit forced low on trip")
+check(forced_low, "igniter bit forced low on trip")
 step(10)
-check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "spark guard ends ABORTED")
+check(getreg(C.ADDR_STATE) == C.ST_ABORTED, "igniter guard ends ABORTED")
 cmd(C.CMD_RESET)
 
 -- abort while ARMED goes straight to safe/ABORTED

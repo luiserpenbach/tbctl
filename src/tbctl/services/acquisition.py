@@ -32,6 +32,9 @@ from tbctl.services.thermocouple import compensated_temp_degc
 log = logging.getLogger(__name__)
 
 CJC_POLL_S = 1.0  # cold-junction temperature refresh interval
+# Streamed DIO image covering DIO 0-15, i.e. every possible sequencer output
+# (FIO0-7 + EIO0-7). Read-only and does not change line direction.
+DIO_SCAN_NAME = "FIO_EIO_STATE"
 
 
 class RingBuffer:
@@ -158,6 +161,20 @@ class AcquisitionService:
         self.scan_rate_hz = max(
             (chmap.rate_groups[c.rate_group].rate_hz for c in inputs), default=50.0
         )
+        # outputs: one extra scan entry (the DIO word), split into a 0/1
+        # "open/on" column per output, recorded in the fastest input group
+        self._outputs = chmap.outputs() if chmap.device.record_outputs and inputs else []
+        self._output_bits = [(chmap.bit_index(c.tag), chmap.active_level(c)) for c in self._outputs]
+        output_group = (
+            max(
+                {c.rate_group for c in inputs},
+                key=lambda g: chmap.rate_groups[g].rate_hz,
+            )
+            if self._outputs
+            else None
+        )
+        if self._outputs:
+            self._scan_names.append(DIO_SCAN_NAME)
         # derived channels: compiled expression + which group they compute on.
         # A derived channel lives in the ring of its fastest referenced
         # channel; references to slower groups are sample-and-hold.
@@ -175,6 +192,7 @@ class AcquisitionService:
         self._group_phys: dict[str, dict[str, int]] = {}  # tag -> col within group block
         for group, rg in chmap.rate_groups.items():
             tags = [c.tag for c in inputs if c.rate_group == group]
+            otags = [c.tag for c in self._outputs] if group == output_group else []
             dtags = [t for t, _, _ in self._derived_by_group.get(group, [])]
             if not tags and not dtags:
                 continue
@@ -192,8 +210,13 @@ class AcquisitionService:
             self._group_decim[group] = round(factor)
             self._group_cols[group] = [self._scan_names.index(chmap.by_tag(t).hw) for t in tags]
             self._group_phys[group] = {t: k for k, t in enumerate(tags)}
-            self.rings[group] = RingBuffer(tags + dtags, rg.rate_hz, capacity_s)
-        self._tag_group = {c.tag: c.rate_group for c in inputs} | derived_group_of
+            self.rings[group] = RingBuffer(tags + otags + dtags, rg.rate_hz, capacity_s)
+        self._output_group = output_group
+        self._tag_group = (
+            {c.tag: c.rate_group for c in inputs}
+            | {c.tag: output_group for c in self._outputs}
+            | derived_group_of
+        )
         # latest EU value per physical tag, for cross-group sample-and-hold
         self._latest_eu: dict[str, float] = {}
         self._cj_degc = 25.0
@@ -216,6 +239,11 @@ class AcquisitionService:
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
+        # per-channel range + single-ended/differential, before the stream
+        # starts (stream mode honours both); the T7 defaults are +-10 V vs GND
+        if settings := self._chmap.ain_settings():
+            names, values = zip(*settings, strict=True)
+            await asyncio.to_thread(self._iface.write_names, list(names), list(values))
         scans_per_read = max(1, int(self.scan_rate_hz / 10))  # ~10 Hz loop
         actual = await asyncio.to_thread(
             self._iface.stream_start, self._scan_names, self.scan_rate_hz, scans_per_read
@@ -266,10 +294,20 @@ class AcquisitionService:
                 self._cj_degc = self._iface.read_name("TEMPERATURE_DEVICE_K") - 273.15
         idx = self._samples_in + np.arange(n)
         t = self._stream_epoch + idx / self.scan_rate_hz
-        eu = np.empty_like(volts)
+        n_in = len(self._converters)
+        eu = np.empty((n, n_in), dtype=np.float64)
         for j, conv in enumerate(self._converters):
             eu[:, j] = conv(volts[:, j], self._cj_degc)
             self._latest_raw[self._scan_channels[j].tag] = float(volts[-1, j])
+        if self._outputs:
+            raw = volts[:, n_in]
+            # LJM fills skipped scans with -9999 (LJM_DUMMY_VALUE): no state known
+            valid = np.isfinite(raw) & (raw >= 0)
+            word = np.where(valid, raw, 0).astype(np.int64)
+            states = np.column_stack(
+                [((word >> bit) & 1) == level for bit, level in self._output_bits]
+            ).astype(np.float64)
+            states[~valid] = np.nan
         # pass 1: slice per-group blocks and refresh latest EU values, so
         # derived channels see the freshest cross-group samples in pass 2
         blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -280,6 +318,8 @@ class AcquisitionService:
                 continue
             gt = t[mask]
             gv = eu[np.ix_(mask, self._group_cols[group])]
+            if group == self._output_group:
+                gv = np.column_stack([gv, states[mask]])
             blocks[group] = (gt, gv)
             for tag, k in self._group_phys[group].items():
                 self._latest_eu[tag] = float(gv[-1, k])

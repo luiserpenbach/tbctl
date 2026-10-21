@@ -179,7 +179,8 @@ async def test_derived_acquisition_cross_group(tmp_path):
         await acq.stop()
 
     vals = acq.latest_values()
-    assert vals["calc.sum"] == pytest.approx(13.0, abs=0.1)
+    # sim wobble is +-1% per input (0.10 + 0.03 bar), so allow its full bound
+    assert vals["calc.sum"] == pytest.approx(13.0, abs=0.15)
     assert vals["calc.slow_double"] == pytest.approx(6.0, abs=0.1)
     # live_window resolves derived tags too
     win = acq.live_window(["calc.sum"], 10.0)

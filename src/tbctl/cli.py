@@ -43,6 +43,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
             print(f"   WARNING: {name} sets allow_unsafe_end=true")
     for _name, d in bundle.dashboards.items():
         print(f"OK {d.path}  sha256={d.sha256[:16]}…  ({len(d.model.panels)} panels)")
+    if bundle.sim is not None:
+        print(f"OK {bundle.sim.path}  (simulator plant model, --sim only)")
     print("all configs valid")
     return 0
 
@@ -202,6 +204,25 @@ def cmd_deploy_lua(args: argparse.Namespace) -> int:
         dev.close()
 
 
+def cmd_export_hopper(args: argparse.Namespace) -> int:
+    """Write <run_id>.hopper.csv + <run_id>.channel-map.json for hopper-test-lab."""
+    import json
+
+    from tbctl.services import hopper
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for run in args.runs:
+        path = Path(run)
+        csv_path = out_dir / f"{path.stem}.hopper.csv"
+        with csv_path.open("w", newline="") as f:
+            f.writelines(hopper.csv_rows(path))
+        map_path = out_dir / f"{path.stem}.channel-map.json"
+        map_path.write_text(json.dumps(hopper.run_channel_map(path), indent=2) + "\n")
+        print(f"{csv_path}\n{map_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tbctl", description="testbench control CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -240,6 +261,13 @@ def main(argv: list[str] | None = None) -> int:
         "--no-flash", action="store_true", help="don't persist the script across power cycles"
     )
     p_dep.set_defaults(func=cmd_deploy_lua)
+
+    p_hop = sub.add_parser(
+        "export-hopper", help="export run files as hopper-test-lab CSV + channel map"
+    )
+    p_hop.add_argument("runs", nargs="+", help="run .h5 files")
+    p_hop.add_argument("--out", default=".", help="output directory")
+    p_hop.set_defaults(func=cmd_export_hopper)
 
     args = parser.parse_args(argv)
     return args.func(args)

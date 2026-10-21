@@ -1,5 +1,8 @@
 # Offline analysis of tbctl runs
 
+For campaign analysis, reports and comparisons use hopper-test-lab
+(`docs/hopper-test-lab.md`). This page covers scripting against run files.
+
 Every run is a self-contained HDF5 file in `data/runs/` (plus a
 `.annotations.json` sidecar for review annotations). `tools/tbctl_load.py`
 reads one back into plain numpy structures — no pandas dependency, but one
@@ -35,7 +38,13 @@ run.annotations                # review annotations incl. auto rule-failures
 run.events                     # full event log (valve cmds, FIRE, notes, ...)
 ```
 
+Valves and igniters are recorded as 0/1 channels (1 = open / on) in the
+fastest rate group, e.g. `df["valve.ox_main"]` (run files from schema 2 on).
+
 ## Alternative exports
+
+- hopper-test-lab: `GET /api/runs/{id}/export/hopper.csv` + `hopper-channel-map.json`,
+  or `uv run tbctl export-hopper <run.h5>` (`docs/hopper-test-lab.md`).
 
 - CSV: `GET /api/runs/{id}/export.csv?tags=a,b&t0=&t1=` (full resolution,
   union timebase) — also linked from each run in the sidebar.

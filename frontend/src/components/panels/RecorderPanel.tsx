@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { fetchRuns, postRunNote, startRun, stopRun } from "../../api";
 import { useStore } from "../../store";
 
@@ -59,54 +59,47 @@ export function RecorderPanel() {
       .catch((e) => setErr(String(e)));
   };
 
-  const inputStyle: CSSProperties = {
-    background: "var(--bg)",
-    border: "1px solid var(--border)",
-    borderRadius: 3,
-    color: "var(--text)",
-    padding: "4px 8px",
-    fontSize: 12,
-    width: "100%",
-  };
-
   return (
-    <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6, height: "100%" }}>
+    <div className="rec-panel">
       {rec?.active ? (
         <>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 13 }}>
-            <span style={{ color: "var(--red)" }}>●</span> {rec.run_id}
+          <div className="rec-live">
+            <span className="rec-id" title={rec.run_id ?? ""}>
+              <span className="rec-dot" />
+              {rec.run_id}
+            </span>
+            <span className="microlabel">recording</span>
           </div>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 22 }}>
-            {new Date(elapsed * 1000).toISOString().slice(11, 19)}
-          </div>
-          <div style={{ display: "flex", gap: 4 }}>
+          <div className="rec-timer">{new Date(elapsed * 1000).toISOString().slice(11, 19)}</div>
+          <div style={{ display: "flex", gap: 6 }}>
             <input
-              style={inputStyle}
               placeholder="Note / bookmark…"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addNote()}
             />
             <button className="btn" disabled={!note.trim()} onClick={addNote}>
-              + note
+              Note
             </button>
           </div>
-          {noteMsg && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{noteMsg}</div>}
-          <button className="btn" onClick={doStop} disabled={busy} style={{ marginTop: "auto" }}>
-            ■ stop run
+          {noteMsg && <div className="rec-note-msg">{noteMsg}</div>}
+          <button className="btn rec-stop" onClick={doStop} disabled={busy}>
+            <span className="sq" />
+            Stop recording
           </button>
         </>
       ) : (
         <>
-          <input style={inputStyle} placeholder="Run name" value={name} onChange={(e) => setName(e.target.value)} />
-          <input style={inputStyle} placeholder="Operator" value={operator} onChange={(e) => setOperator(e.target.value)} />
-          <input style={inputStyle} placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-          <button className="btn" onClick={doStart} disabled={busy} style={{ marginTop: "auto" }}>
-            ● start run
+          <input placeholder="Run name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input placeholder="Operator" value={operator} onChange={(e) => setOperator(e.target.value)} />
+          <input placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <button className="btn rec-start" onClick={doStart} disabled={busy}>
+            <span className="rdot" />
+            Start recording
           </button>
         </>
       )}
-      {err && <div style={{ color: "var(--red)", fontSize: 11 }}>{err}</div>}
+      {err && <div className="err-text">{err}</div>}
     </div>
   );
 }

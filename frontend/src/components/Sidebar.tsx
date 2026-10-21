@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchRuns, runCsvUrl } from "../api";
+import { fetchRuns, runCsvUrl, runHopperCsvUrl, runHopperMapUrl } from "../api";
 import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
-import { isReadable } from "../types";
+import { isReadable, OUTCOME_LABEL, type Outcome } from "../types";
 import { EventFeed } from "./EventFeed";
+
+const OUTCOME_COLOR: Record<Outcome, string> = {
+  pass: "var(--green)",
+  anomaly: "var(--amber)",
+  fail: "var(--red)",
+  void: "var(--text-faint)",
+};
 
 export function Sidebar() {
   const channels = useStore((s) => s.channels);
@@ -66,13 +73,10 @@ export function Sidebar() {
           />
         )}
         <div
-          className="chan"
-          style={{ cursor: "pointer" }}
+          className={`chan run live-row ${viewMode.mode === "live" ? "active" : ""}`}
           onClick={() => setViewMode({ mode: "live" })}
         >
-          <span style={{ color: viewMode.mode === "live" ? "var(--accent)" : undefined }}>
-            ▶ live
-          </span>
+          <span>● Live telemetry</span>
         </div>
         {runs
           .filter((r) => {
@@ -89,30 +93,33 @@ export function Sidebar() {
           .map((r) => {
           const active = viewMode.mode === "run" && viewMode.run.run_id === r.run_id;
           const overlaid = overlayRuns.some((o) => o.run_id === r.run_id);
-          const outcomeColor =
-            r.outcome === "good"
-              ? "var(--green)"
-              : r.outcome === "anomaly"
-                ? "var(--red)"
-                : r.outcome === "scrub"
-                  ? "var(--text-faint)"
-                  : null;
+          const outcomeColor = r.outcome ? OUTCOME_COLOR[r.outcome] : null;
           return (
             <div
               key={r.run_id}
-              className="chan"
-              style={{ cursor: "pointer" }}
+              className={`chan run ${active ? "active" : ""}`}
               title={`${r.operator} — ${r.notes}${r.tags?.length ? ` · ${r.tags.join(", ")}` : ""}`}
               onClick={() => setViewMode({ mode: "run", run: r })}
             >
-              <span style={{ color: active ? "var(--accent)" : overlaid ? "var(--amber)" : undefined }}>
+              <span
+                style={{
+                  color: overlaid && !active ? "var(--amber)" : undefined,
+                  minWidth: 0,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
                 {outcomeColor && (
-                  <span style={{ color: outcomeColor, marginRight: 4 }} title={r.outcome ?? ""}>
+                  <span
+                    style={{ color: outcomeColor, marginRight: 4 }}
+                    title={r.outcome ? OUTCOME_LABEL[r.outcome] : ""}
+                  >
                     ●
                   </span>
                 )}
-                {r.run_id}
+                <RunLabel runId={r.run_id} />
               </span>
+              <span className="run-links">
               {viewMode.mode === "run" && !active && (
                 <a
                   className="csv-link"
@@ -140,6 +147,25 @@ export function Sidebar() {
               >
                 csv⬇
               </a>
+              <a
+                className="csv-link"
+                title="download for hopper-test-lab: full-run CSV (drop it into Imports)"
+                href={runHopperCsvUrl(r.run_id)}
+                download
+                onClick={(e) => e.stopPropagation()}
+              >
+                htl⬇
+              </a>
+              <a
+                className="csv-link"
+                title="hopper-test-lab channel map for this run (names, units, classes)"
+                href={runHopperMapUrl(r.run_id)}
+                download={`${r.run_id}.channel-map.json`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                map⬇
+              </a>
+              </span>
             </div>
           );
         })}
@@ -150,15 +176,21 @@ export function Sidebar() {
             </div>
             {!collapsed.has(ns) &&
               chans.map((c) => {
-                const isOutput = c.kind === "valve" || c.kind === "spark";
+                const isOutput = c.kind === "valve" || c.kind === "igniter";
                 const val = isOutput
                   ? (status?.outputs[c.tag] ?? "—")
                   : fmt(buffers.latest(c.tag));
+                const lit = val === "open" || val === "on";
                 return (
-                  <div key={c.tag} className={`chan ${isOutput ? "output" : ""}`} title={c.hw}>
+                  <div
+                    key={c.tag}
+                    className={`chan ${isOutput ? "output" : ""}`}
+                    title={c.name ? `${c.name} · ${c.hw}` : c.hw}
+                  >
                     <span>{c.tag.slice(ns.length + 1)}</span>
-                    <span className="val">
-                      {val} {c.unit ?? ""}
+                    <span className={`val ${isOutput ? (lit ? "on" : "off") : ""}`}>
+                      {val}
+                      {!isOutput && c.unit && <span className="unit">{c.unit}</span>}
                     </span>
                   </div>
                 );
@@ -168,6 +200,20 @@ export function Sidebar() {
       </div>
       <EventFeed />
     </aside>
+  );
+}
+
+/** run ids are `YYYYMMDD-HHMMSS-name`: show the name, with date + time small */
+function RunLabel({ runId }: { runId: string }) {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}-(.*)$/.exec(runId);
+  if (!m) return <span className="run-name">{runId}</span>;
+  return (
+    <span className="run-label">
+      <span className="run-name">{m[6]}</span>
+      <span className="run-when">
+        {m[2]}-{m[3]} {m[4]}:{m[5]}
+      </span>
+    </span>
   );
 }
 

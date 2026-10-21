@@ -44,7 +44,7 @@ async def test_validate_dry_run(client):
     assert [o["tag"] for o in tl["outputs"]] == [
         c["tag"]
         for c in (await client.get("/api/channels")).json()["channels"]
-        if c["kind"] in ("valve", "spark")
+        if c["kind"] in ("valve", "igniter")
     ]
     # carry-forward words: purge-open step keeps everything else at safe
     purge_bit = next(o["bit"] for o in tl["outputs"] if o["tag"] == "valve.purge")

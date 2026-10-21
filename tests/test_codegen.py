@@ -59,7 +59,7 @@ def test_generated_python_importable():
     assert rg.ARM_MAGIC == 0xA55A
     assert rg.Cmd.ABORT == 4
     assert rg.SeqState.FAULT == 7
-    assert rg.SeqError.SPARK_GUARD == 4
+    assert rg.SeqError.IGNITER_GUARD == 4
     assert rg.REG_NAME["CMD"] == "USER_RAM0_U16"
     assert rg.REG_ADDR["ELAPSED_MS"] == 46100
     assert rg.INTERP_VERSION == 1

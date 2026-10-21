@@ -86,7 +86,7 @@ function StepsTable({
               />
             </td>
             {outputs.map((o) => {
-              const opts = o.kind === "spark" ? ["on", "off"] : ["open", "close"];
+              const opts = o.kind === "igniter" ? ["on", "off"] : ["open", "close"];
               const v = s.set[o.tag] ?? "";
               return (
                 <td key={o.tag}>
@@ -279,7 +279,7 @@ function TimelineLanes({
             }
           }
           if (active) segs.push([start, end]);
-          const color = o.kind === "spark" ? "var(--amber)" : "var(--accent)";
+          const color = o.kind === "igniter" ? "var(--amber)" : "var(--accent)";
           return (
             <g key={o.tag}>
               <text x={labelW - 8} y={y + laneH - 3} fill="var(--text-dim)" fontSize="10" textAnchor="end">
@@ -317,10 +317,11 @@ function TimelineLanes({
 const freshSequence = (outputs: ChannelInfo[]): SequenceConfig => {
   const safeSet: Record<string, string> = {};
   for (const o of outputs)
-    safeSet[o.tag] = o.kind === "spark" ? "off" : o.fail_safe === "open" ? "open" : "close";
+    safeSet[o.tag] = o.kind === "igniter" ? "off" : o.fail_safe === "open" ? "open" : "close";
   return {
     name: "new_sequence",
     description: "",
+    test_type: null,
     max_duration_s: 10,
     preconditions: [],
     steps: [{ t: 0, set: { ...safeSet } }],
@@ -335,7 +336,7 @@ export function SequencesEditor() {
   const outputs = useMemo(
     () =>
       channels
-        .filter((c) => c.kind === "valve" || c.kind === "spark")
+        .filter((c) => c.kind === "valve" || c.kind === "igniter")
         .sort((a, b) => (a.bit ?? 0) - (b.bit ?? 0)),
     [channels],
   );
@@ -466,6 +467,22 @@ export function SequencesEditor() {
               disabled={!editable}
               onChange={(e) => upd({ description: e.target.value })}
             />
+            <span title="hopper-test-lab test type stamped on runs that fire this sequence">
+              test type
+            </span>
+            <select
+              className="seq-select"
+              value={cfg.test_type ?? ""}
+              disabled={!editable}
+              onChange={(e) =>
+                upd({ test_type: (e.target.value || null) as SequenceConfig["test_type"] })
+              }
+            >
+              <option value="">— none —</option>
+              <option value="engine">engine (hot fire)</option>
+              <option value="igniter">igniter</option>
+              <option value="cold_flow">cold flow</option>
+            </select>
             <span>max duration s</span>
             <input
               className="modal-input"

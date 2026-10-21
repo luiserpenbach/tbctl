@@ -1,8 +1,18 @@
-# Pi Deployment Guide (spec M7)
+# Pi / Linux server deployment guide (spec M7)
 
 Target: fresh Raspberry Pi 5 → running `tbctl-node` in **under 30 minutes**.
 The Pi lives in the test cabinet on the bench LAN; the operator laptop is a
 pure browser client (`http://192.168.10.10:8000`).
+
+**Linux server instead of a Pi:** everything below applies to any 64-bit
+Debian/Ubuntu host on the bench LAN. Differences: install the LJM package
+for the host's architecture (x86_64 instead of aarch64) in step 4, and skip
+the Raspberry Pi OS imaging in step 1. Keep the node wired to the T7 —
+heartbeat loss aborts an armed sequence after `HB_TIMEOUT_MS` (500 ms).
+
+**Per-site configs:** keep one config directory per setup (e.g. the
+Aldenhoven stand and the H2 lander) and point `--config-dir` (systemd unit,
+`tbctl validate/probe/deploy-lua`) at the one in use.
 
 ## Network plan
 

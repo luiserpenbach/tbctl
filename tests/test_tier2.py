@@ -53,9 +53,9 @@ async def test_run_meta_tags_and_outcome(client):
     assert entry["outcome"] == "anomaly"
 
     # partial patch: outcome only, tags untouched; then clear outcome
-    await client.patch(f"/api/runs/{run_id}/meta", json={"outcome": "good"})
+    await client.patch(f"/api/runs/{run_id}/meta", json={"outcome": "pass"})
     meta = (await client.get(f"/api/runs/{run_id}")).json()
-    assert meta["outcome"] == "good" and meta["tags"] == ["igniter-test", "campaign-2"]
+    assert meta["outcome"] == "pass" and meta["tags"] == ["igniter-test", "campaign-2"]
     await client.patch(f"/api/runs/{run_id}/meta", json={"clear_outcome": True})
     assert (await client.get(f"/api/runs/{run_id}")).json()["outcome"] is None
 
@@ -90,7 +90,7 @@ async def test_xy_panel_type_accepted(client):
 
 async def test_python_loader(client):
     run_id = await _quick_run(client)
-    await client.patch(f"/api/runs/{run_id}/meta", json={"tags": ["x"], "outcome": "good"})
+    await client.patch(f"/api/runs/{run_id}/meta", json={"tags": ["x"], "outcome": "pass"})
     await client.post(f"/api/runs/{run_id}/annotations", json={"t0": 0, "t1": 1, "label": "band"})
     path = client.ctx.recorder.run_path(run_id)
 
@@ -98,7 +98,7 @@ async def test_python_loader(client):
 
     run = load_run(path)
     assert run.meta["run_id"] == run_id
-    assert run.meta["tags"] == ["x"] and run.meta["outcome"] == "good"
+    assert run.meta["tags"] == ["x"] and run.meta["outcome"] == "pass"
     t, pc = run.channel("pressure.chamber")
     assert len(t) == len(pc) > 10
     assert run.channel("calc.dp_ox_inj")[1].shape == t.shape  # derived recorded too

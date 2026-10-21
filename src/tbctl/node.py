@@ -73,7 +73,7 @@ def build_context(
     if sim:
         from tbctl.hw.ljm_mock import MockDevice
 
-        backend = MockDevice(chmap)
+        backend = MockDevice(chmap, plant=bundle.sim.model if bundle.sim else None)
         mode = "sim"
     else:
         from tbctl.hw.ljm_iface import LjmDevice
@@ -89,7 +89,9 @@ def build_context(
     events.add_sink(recorder.on_event)
     sequencer = SequencerService(bundle, iface, acq, events)
     manual = ManualControl(chmap, iface, events)
-    device_mgr = DeviceManager(chmap, iface, acq, events, mode)
+    device_mgr = DeviceManager(
+        chmap, iface, acq, events, mode, bundle.sim.model if bundle.sim else None
+    )
     ctx = NodeContext(
         device_mgr=device_mgr,
         bundle=bundle,

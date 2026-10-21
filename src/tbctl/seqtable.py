@@ -7,15 +7,15 @@ Little-endian, all integers unsigned:
       n_abort_steps  u16
       dio_inhibit    u16   # bits NOT controlled by the sequencer
       safe_word      u16   # fail-safe output image
-      spark_guard_ms u16   # D9; 0 = no spark bit present
-      spark_mask     u16   # DIO bit(s) of the spark line the guard watches
+      igniter_guard_ms u16   # D9; 0 = no igniter bit present
+      igniter_mask     u16   # DIO bit(s) of the igniter line the guard watches
     steps:      n_steps       x (t_ms u32, dio_word u16)
     abort:      n_abort_steps x (t_ms u32, dio_word u16)
     trailer (2 bytes):
       crc16          u16   # CRC-16/CCITT-FALSE over header+steps+abort
 
-The spark_mask field is a deliberate extension of the original hand-off §5
-layout (10-byte header): the Lua guard must know which bit is the spark
+The igniter_mask field is a deliberate extension of the original hand-off §5
+layout (10-byte header): the Lua guard must know which bit is the igniter
 line, and that assignment has to sit inside the CRC-protected table.
 
 The Lua interpreter re-parses these bytes independently and recomputes the
@@ -61,8 +61,8 @@ class Step:
 class StepTable:
     dio_inhibit: int
     safe_word: int
-    spark_guard_ms: int
-    spark_mask: int
+    igniter_guard_ms: int
+    igniter_mask: int
     steps: tuple[Step, ...] = field(default_factory=tuple)
     abort: tuple[Step, ...] = field(default_factory=tuple)
 
@@ -70,8 +70,8 @@ class StepTable:
         for name, val in (
             ("dio_inhibit", self.dio_inhibit),
             ("safe_word", self.safe_word),
-            ("spark_guard_ms", self.spark_guard_ms),
-            ("spark_mask", self.spark_mask),
+            ("igniter_guard_ms", self.igniter_guard_ms),
+            ("igniter_mask", self.igniter_mask),
         ):
             if not 0 <= val <= 0xFFFF:
                 raise TableFormatError(f"{name} {val:#x} out of u16 range")
@@ -81,8 +81,8 @@ class StepTable:
             for prev, cur in itertools.pairwise(steps):
                 if cur.t_ms < prev.t_ms:
                     raise TableFormatError(f"{what}: step times not monotonic")
-        if self.spark_guard_ms and not self.spark_mask:
-            raise TableFormatError("spark_guard_ms set but spark_mask empty")
+        if self.igniter_guard_ms and not self.igniter_mask:
+            raise TableFormatError("igniter_guard_ms set but igniter_mask empty")
 
     # -- encoding ----------------------------------------------------------
 
@@ -94,8 +94,8 @@ class StepTable:
                 len(self.abort),
                 self.dio_inhibit,
                 self.safe_word,
-                self.spark_guard_ms,
-                self.spark_mask,
+                self.igniter_guard_ms,
+                self.igniter_mask,
             )
         ]
         parts += [_STEP.pack(s.t_ms, s.dio_word) for s in (*self.steps, *self.abort)]

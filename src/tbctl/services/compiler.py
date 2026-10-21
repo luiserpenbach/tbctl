@@ -7,7 +7,7 @@ expansion:
   - final main-table state must equal safe_word, unless the sequence sets
     `allow_unsafe_end: true` (then it becomes a loud warning)
   - the abort table's final state must equal safe_word — always a hard error
-  - static spark on-time within the table must not exceed max_on_ms
+  - static igniter on-time within the table must not exceed max_on_ms
     (the Lua guard is the dynamic backstop, D9)
 """
 
@@ -50,8 +50,8 @@ class CompiledSequence:
             "abort_duration_ms": self.abort_duration_ms,
             "safe_word": self.table.safe_word,
             "dio_inhibit": self.table.dio_inhibit,
-            "spark_guard_ms": self.table.spark_guard_ms,
-            "spark_mask": self.table.spark_mask,
+            "igniter_guard_ms": self.table.igniter_guard_ms,
+            "igniter_mask": self.table.igniter_mask,
             "crc16": self.table.crc16,
             "size_bytes": len(self.table.pack()),
             "warnings": self.warnings,
@@ -86,12 +86,12 @@ def _expand(
     return out
 
 
-def _max_spark_on_ms(steps: list[Step], end_ms: int, spark_mask: int) -> int:
-    """Longest continuous spark-high interval implied by the table."""
+def _max_igniter_on_ms(steps: list[Step], end_ms: int, igniter_mask: int) -> int:
+    """Longest continuous igniter-high interval implied by the table."""
     longest = 0
     on_since: int | None = None
     for s in steps:
-        if s.dio_word & spark_mask:
+        if s.dio_word & igniter_mask:
             if on_since is None:
                 on_since = s.t_ms
         elif on_since is not None:
@@ -139,19 +139,19 @@ def compile_sequence(seq: Sequence, chmap: ChannelMap) -> CompiledSequence:
             f"0x{safe_word:04X}"
         )
 
-    # spark guard (D9)
-    sparks = chmap.spark_channels()
-    spark_mask = 0
-    spark_guard_ms = 0
-    for sc in sparks:
-        spark_mask |= 1 << dio_number(sc.hw)
-    if spark_mask:
-        spark_guard_ms = min(sc.max_on_ms for sc in sparks)
+    # igniter guard (D9)
+    igniters = chmap.igniter_channels()
+    igniter_mask = 0
+    igniter_guard_ms = 0
+    for sc in igniters:
+        igniter_mask |= 1 << dio_number(sc.hw)
+    if igniter_mask:
+        igniter_guard_ms = min(sc.max_on_ms for sc in igniters)
         for what, steps, end in (("steps", main, duration_ms), ("abort", abort, abort_duration_ms)):
-            on_ms = _max_spark_on_ms(steps, end, spark_mask)
-            if on_ms > spark_guard_ms:
+            on_ms = _max_igniter_on_ms(steps, end, igniter_mask)
+            if on_ms > igniter_guard_ms:
                 errors.append(
-                    f"{what}: spark on for {on_ms} ms in table, exceeds max_on_ms {spark_guard_ms}"
+                    f"{what}: igniter on for {on_ms} ms in table, exceeds max_on_ms {igniter_guard_ms}"
                 )
 
     if errors:
@@ -160,8 +160,8 @@ def compile_sequence(seq: Sequence, chmap: ChannelMap) -> CompiledSequence:
     table = StepTable(
         dio_inhibit=chmap.dio_inhibit(),
         safe_word=safe_word,
-        spark_guard_ms=spark_guard_ms,
-        spark_mask=spark_mask,
+        igniter_guard_ms=igniter_guard_ms,
+        igniter_mask=igniter_mask,
         steps=tuple(main),
         abort=tuple(abort),
     )

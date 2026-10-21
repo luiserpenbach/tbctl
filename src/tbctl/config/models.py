@@ -33,6 +33,36 @@ _AIN_RE = re.compile(r"^AIN([0-9]+)$")
 
 MAX_OUTPUT_BITS = 16
 
+# T7 analog input settings, written to the device before every stream start.
+# AIN#_RANGE takes one of these (+-V). AIN#_NEGATIVE_CH is 199 for
+# single-ended (vs GND) or the negative AIN of a differential pair: on the
+# base inputs the pair is an even AIN and the next odd one (AIN0/AIN1 ...
+# AIN12/AIN13); on Mux80 extended inputs (AIN16-127) it is n and n+8 with n
+# in the lower half of its 16-channel block (AIN48/AIN56 ... AIN55/AIN63).
+AIN_RANGES = (10.0, 1.0, 0.1, 0.01)
+SINGLE_ENDED = 199
+
+
+def ain_number(hw: str) -> int:
+    m = _AIN_RE.match(hw)
+    if not m:
+        raise ValueError(f"{hw!r} is not an AIN name")
+    return int(m.group(1))
+
+
+def differential_error(pos_hw: str, neg_hw: str) -> str | None:
+    """Why (pos, neg) is not a valid T7 differential pair, or None."""
+    p, n = ain_number(pos_hw), ain_number(neg_hw)
+    if p <= 13:
+        if p % 2 == 0 and n == p + 1:
+            return None
+        return f"{pos_hw}: base differential pairs are even/odd neighbours (AIN{p - p % 2}/AIN{p - p % 2 + 1})"
+    if p >= 16:
+        if (p // 8) % 2 == 0 and n == p + 8:
+            return None
+        return f"{pos_hw}: extended differential pairs are AINn/AIN(n+8), n in the lower half of its 16-block"
+    return f"{pos_hw}: AIN14/AIN15 cannot be differential"
+
 
 def dio_number(hw: str) -> int:
     """Global DIO number for a DIO name like FIO3 / EIO5 (FIO0=0 ... MIO2=22)."""
@@ -61,6 +91,10 @@ class DeviceConfig(StrictModel):
     # "usb" (bench/laptop testing, ignores `ip`), or "any" (first T7 found).
     connection: Literal["ethernet", "usb", "any"] = "ethernet"
     watchdog_timeout_s: int = Field(ge=1, le=60)
+    # Stream FIO_EIO_STATE alongside the analog inputs and record every
+    # output (valve / igniter) as a 0/1 channel (1 = open / on) in the
+    # fastest rate group. hopper-test-lab times ignition from these edges.
+    record_outputs: bool = True
 
     def ljm_open_args(self) -> tuple[str, str]:
         """(connection_type, identifier) for LJM openS."""
@@ -109,12 +143,32 @@ class TableCal(StrictModel):
 Cal = Annotated[PolynomialCal | LinearCal | TableCal, Field(discriminator="kind")]
 
 
+def _check_range(v: float) -> float:
+    if v not in AIN_RANGES:
+        raise ValueError(f"range must be one of {AIN_RANGES} (T7 +-V), got {v}")
+    return v
+
+
+def _check_differential(ch):
+    if ch.negative_ch is not None:
+        if not _AIN_RE.match(ch.negative_ch):
+            raise ValueError(f"{ch.tag}: negative_ch must be an AIN name, got {ch.negative_ch!r}")
+        if err := differential_error(ch.hw, ch.negative_ch):
+            raise ValueError(f"{ch.tag}: {err}")
+    return ch
+
+
 class AnalogInChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
     kind: Literal["analog_in"]
     unit: str
-    range: float = Field(default=10.0, description="LJM AIN range setting in volts")
+    range: float = Field(default=10.0, description="T7 AIN range, +-V (10, 1, 0.1, 0.01)")
+    # negative input of a differential pair (e.g. AIN7 for AIN6); None = single-ended
+    negative_ch: str | None = None
     cal: Cal = PolynomialCal(kind="polynomial", coeffs=[0.0, 1.0])
     rate_group: str = "default"
 
@@ -126,12 +180,27 @@ class AnalogInChannel(StrictModel):
             raise ValueError(f"analog_in hw must be AIN0..AIN127, got {v!r}")
         return v
 
+    @field_validator("range")
+    @classmethod
+    def _range(cls, v: float) -> float:
+        return _check_range(v)
+
+    @model_validator(mode="after")
+    def _differential(self) -> AnalogInChannel:
+        return _check_differential(self)
+
 
 class ThermocoupleChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
     kind: Literal["thermocouple_k"]
     unit: Literal["degC", "K", "degF"] = "degC"
+    # type K is ~41 uV/degC (~55 mV at 1372 degC): +-0.1 V keeps the resolution
+    range: float = 0.1
+    negative_ch: str | None = None  # thermocouples are usually wired differential
     rate_group: str = "default"
 
     @field_validator("hw")
@@ -141,9 +210,21 @@ class ThermocoupleChannel(StrictModel):
             raise ValueError(f"thermocouple hw must be an AIN, got {v!r}")
         return v
 
+    @field_validator("range")
+    @classmethod
+    def _range(cls, v: float) -> float:
+        return _check_range(v)
+
+    @model_validator(mode="after")
+    def _differential(self) -> ThermocoupleChannel:
+        return _check_differential(self)
+
 
 class ValveChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
     kind: Literal["valve"]
     fail_safe: Literal["closed", "open"]
@@ -156,10 +237,13 @@ class ValveChannel(StrictModel):
         return v
 
 
-class SparkChannel(StrictModel):
+class IgniterChannel(StrictModel):
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     hw: str
-    kind: Literal["spark"]
+    kind: Literal["igniter"]
     fail_safe: Literal["off"]
     on_state: Literal["high", "low"] = "high"
     max_on_ms: int = Field(default=2000, ge=1, le=60000)  # D9 guard
@@ -179,6 +263,9 @@ class DerivedChannel(StrictModel):
     are sample-and-hold)."""
 
     tag: str
+    # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
+    # hopper-test-lab exports. Empty = use the tag.
+    name: str = Field(default="", max_length=40)
     kind: Literal["derived"]
     unit: str = ""
     expr: str
@@ -196,11 +283,11 @@ class DerivedChannel(StrictModel):
 
 
 Channel = Annotated[
-    AnalogInChannel | ThermocoupleChannel | ValveChannel | SparkChannel | DerivedChannel,
+    AnalogInChannel | ThermocoupleChannel | ValveChannel | IgniterChannel | DerivedChannel,
     Field(discriminator="kind"),
 ]
 
-OutputChannel = ValveChannel | SparkChannel
+OutputChannel = ValveChannel | IgniterChannel
 InputChannel = AnalogInChannel | ThermocoupleChannel
 
 _TAG_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)+$")
@@ -219,9 +306,18 @@ class ChannelMap(StrictModel):
         for t in tags:
             if not _TAG_RE.match(t):
                 raise ValueError(f"tag {t!r} must be dotted lowercase (e.g. pressure.chamber)")
+        names = [c.name for c in self.channels if c.name]
+        if dupes := {n for n in names if names.count(n) > 1}:
+            raise ValueError(f"duplicate channel names: {sorted(dupes)}")
         hws = [c.hw for c in self.channels if not isinstance(c, DerivedChannel)]
         if dupes := {h for h in hws if hws.count(h) > 1}:
             raise ValueError(f"duplicate hw assignments: {sorted(dupes)}")
+        for c in self.inputs():
+            if c.negative_ch is not None and c.negative_ch in hws:
+                raise ValueError(
+                    f"{c.tag}: {c.negative_ch} is its differential negative input, "
+                    "so no channel can use it"
+                )
         if "default" not in self.rate_groups:
             raise ValueError("rate_groups must define 'default'")
         for c in self.channels:
@@ -261,6 +357,15 @@ class ChannelMap(StrictModel):
         """Physical (hardware-scanned) input channels."""
         return [c for c in self.channels if isinstance(c, InputChannel)]
 
+    def ain_settings(self) -> list[tuple[str, float]]:
+        """(register, value) pairs configuring every scanned AIN: range and
+        negative channel. Written before each stream start."""
+        out: list[tuple[str, float]] = []
+        for c in self.inputs():
+            neg = ain_number(c.negative_ch) if c.negative_ch else SINGLE_ENDED
+            out += [(f"{c.hw}_RANGE", c.range), (f"{c.hw}_NEGATIVE_CH", float(neg))]
+        return out
+
     def derived(self) -> list[DerivedChannel]:
         return [c for c in self.channels if isinstance(c, DerivedChannel)]
 
@@ -290,13 +395,13 @@ class ChannelMap(StrictModel):
         raise KeyError(f"unknown channel tag {tag!r}")
 
     def active_level(self, c: OutputChannel) -> int:
-        """Electrical level (0/1) meaning 'open' (valve) / 'on' (spark)."""
+        """Electrical level (0/1) meaning 'open' (valve) / 'on' (igniter)."""
         pol = c.open_state if isinstance(c, ValveChannel) else c.on_state
         return 1 if pol == "high" else 0
 
     def safe_level(self, c: OutputChannel) -> int:
         """Electrical level of the fail-safe state."""
-        # spark fail_safe is always 'off'; only a valve can fail to its active state
+        # igniter fail_safe is always 'off'; only a valve can fail to its active state
         active = isinstance(c, ValveChannel) and c.fail_safe == "open"
         return self.active_level(c) if active else 1 - self.active_level(c)
 
@@ -316,8 +421,8 @@ class ChannelMap(StrictModel):
         """§5 header field: bits NOT controlled by the sequencer (16-bit)."""
         return (~self.controlled_mask()) & 0xFFFF
 
-    def spark_channels(self) -> list[SparkChannel]:
-        return [c for c in self.channels if isinstance(c, SparkChannel)]
+    def igniter_channels(self) -> list[IgniterChannel]:
+        return [c for c in self.channels if isinstance(c, IgniterChannel)]
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +434,10 @@ MIN_STEP_SPACING_S = 0.002
 _EPS = 1e-9
 
 StepValue = Literal["open", "close", "on", "off"]
+
+# hopper-test-lab test types (TestType there); stamped on runs that fire the
+# sequence so the analysis side knows which kind of test it is.
+TestType = Literal["engine", "igniter", "cold_flow"]
 
 
 class Precondition(StrictModel):
@@ -391,6 +500,7 @@ def _check_steps(steps: list[SeqStep], what: str, max_duration_s: float | None) 
 class Sequence(StrictModel):
     name: str
     description: str = ""
+    test_type: TestType | None = None  # None = not a test (e.g. timing check)
     max_duration_s: float = Field(gt=0, le=600)
     preconditions: list[Precondition] = []
     steps: list[SeqStep] = Field(min_length=1)
@@ -415,7 +525,7 @@ class Sequence(StrictModel):
 def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
     """Channel-map-dependent checks (§4.2). Returns a list of error strings.
 
-    Word-expansion rules (carry-forward, unsafe-end, static spark on-time)
+    Word-expansion rules (carry-forward, unsafe-end, static igniter on-time)
     are enforced by the step-table compiler, which reuses these checks first.
     """
     errors: list[str] = []
@@ -430,8 +540,8 @@ def cross_validate_sequence(seq: Sequence, chmap: ChannelMap) -> list[str]:
                 ch = chmap.by_tag(tag)
                 if isinstance(ch, ValveChannel) and value not in ("open", "close"):
                     errors.append(f"{what}[{i}]: valve {tag!r} takes open/close, got {value!r}")
-                if isinstance(ch, SparkChannel) and value not in ("on", "off"):
-                    errors.append(f"{what}[{i}]: spark {tag!r} takes on/off, got {value!r}")
+                if isinstance(ch, IgniterChannel) and value not in ("on", "off"):
+                    errors.append(f"{what}[{i}]: igniter {tag!r} takes on/off, got {value!r}")
     for i, pre in enumerate(seq.preconditions):
         if pre.tag not in input_tags:
             errors.append(f"preconditions[{i}]: {pre.tag!r} is not an input channel")
@@ -513,7 +623,7 @@ _ASSET_RE = re.compile(r"^[a-zA-Z0-9_\-]+\.svg$")
 class PidValveElement(StrictModel):
     id: str
     type: Literal["valve"]
-    channel: str  # must be an output channel (valve or spark)
+    channel: str  # must be an output channel (valve or igniter)
     x: float = Field(ge=0, le=1)
     y: float = Field(ge=0, le=1)
     size: float = Field(default=0.05, gt=0, le=0.5)  # fraction of canvas width
@@ -584,6 +694,67 @@ def cross_validate_pid(pid: PidConfig, chmap: ChannelMap) -> list[str]:
             errors.append(f"element {e.id}: {e.channel!r} is not an output channel")
         if isinstance(e, PidSensorElement) and e.channel not in input_tags:
             errors.append(f"element {e.id}: {e.channel!r} is not an input channel")
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Simulator plant model (configs/sim.yaml, --sim only; hardware never reads
+# it). A first-order chamber: lights when both propellant valves are open and
+# the igniter has been on, then Pc lags to pc_bar; thrust and manifold
+# pressures follow Pc. Contributions add to the /api/sim/set setpoints.
+# ---------------------------------------------------------------------------
+
+
+class SimThrust(StrictModel):
+    tag: str
+    n_per_bar: float = Field(gt=0)
+
+
+class SimManifold(StrictModel):
+    tag: str
+    valve: str
+    dp_frac: float = Field(default=0.2, ge=0, le=5)  # injector dp as a fraction of Pc
+
+
+class SimChamber(StrictModel):
+    tag: str  # chamber pressure input
+    ox_valve: str
+    fuel_valve: str
+    igniter: str | None = None  # None = lights without one (e.g. hypergolic)
+    pc_bar: float = Field(gt=0)  # steady state above the setpoint, while lit
+    cold_flow_bar: float = Field(default=1.0, ge=0)  # propellant flowing, not lit
+    ignition_delay_ms: int = Field(default=80, ge=0, le=5000)
+    rise_ms: float = Field(default=40.0, gt=0, le=10000)  # time constants
+    decay_ms: float = Field(default=60.0, gt=0, le=10000)
+    roughness: float = Field(default=0.02, ge=0, le=0.5)  # fractional noise while lit
+    thrust: SimThrust | None = None
+    manifolds: list[SimManifold] = []
+
+
+class SimConfig(StrictModel):
+    chamber: SimChamber | None = None
+
+
+def cross_validate_sim(cfg: SimConfig, chmap: ChannelMap) -> list[str]:
+    c = cfg.chamber
+    if c is None:
+        return []
+    inputs = {ch.tag for ch in chmap.inputs()}
+    valves = {ch.tag for ch in chmap.outputs() if isinstance(ch, ValveChannel)}
+    igniters = {ch.tag for ch in chmap.igniter_channels()}
+    errors = []
+    want = [("tag", c.tag, inputs, "input"), ("ox_valve", c.ox_valve, valves, "valve")]
+    want += [("fuel_valve", c.fuel_valve, valves, "valve")]
+    if c.igniter is not None:
+        want.append(("igniter", c.igniter, igniters, "igniter"))
+    if c.thrust is not None:
+        want.append(("thrust.tag", c.thrust.tag, inputs, "input"))
+    for i, m in enumerate(c.manifolds):
+        want += [(f"manifolds[{i}].tag", m.tag, inputs, "input")]
+        want += [(f"manifolds[{i}].valve", m.valve, valves, "valve")]
+    for field_name, tag, allowed, what in want:
+        if tag not in allowed:
+            errors.append(f"chamber.{field_name}: {tag!r} is not an {what} channel")
     return errors
 
 

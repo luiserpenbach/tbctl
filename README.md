@@ -1,11 +1,18 @@
-# tbctl — Testbench Control Software
+# tbctl — Hopper test control & mission control
 
-DAQ + valve control + deterministic sequencing for GH2/GOX thruster testing
-(cold flows, igniter tests, hot fires) with a Sift-style web UI.
+DAQ + valve control + deterministic sequencing for the Hopper programme:
+the H2 lander and the Aldenhoven test bench (cold flows, igniter tests,
+engine hot fires), with a Sift-style web UI. Recorded runs export straight
+into [hopper-test-lab](https://github.com/luiserpenbach/hopper-test-lab)
+for analysis and reporting (`docs/hopper-test-lab.md`).
+
+> **Before the next hardware test, work through [`TODO.md`](TODO.md).** The
+> configs in `configs/` are generic examples, not the Hopper plumbing.
 
 **Architecture in one paragraph:** A LabJack T7 in the test cabinet drives
-~8 on/off valves (DIO → driver board) and reads ~20 mixed sensors. A
-Raspberry Pi 5 in the cabinet runs a single Python process (`tbctl-node`)
+~8 on/off valves and igniters (DIO → driver board) and reads ~20 mixed
+sensors. A Raspberry Pi 5 (or any Linux server) on the bench LAN runs a
+single Python process (`tbctl-node`)
 that streams data from the T7, records runs to HDF5, and serves a FastAPI
 REST + WebSocket API. Time-critical valve sequences do **not** run in
 Python: they are compiled from YAML into a binary step table, uploaded to a
@@ -13,10 +20,10 @@ frozen generic Lua interpreter running *on* the T7 (1 ms tick), verified by
 CRC read-back, then armed and fired. The operator's laptop is a pure
 browser client (React + uPlot). Safety layers: Lua heartbeat abort (host
 loss), T7 hardware watchdog (Lua death), hardwired E-stop (outside
-software).
+software). Valve and igniter states are streamed with the sensors and
+recorded as 0/1 channels.
 
-See `HANDOFF.md`-level details in the project spec; decisions D1–D12 are
-frozen.
+Decisions D1–D12 of the original project spec are frozen.
 
 ## Quick start (development, no hardware)
 
@@ -37,7 +44,7 @@ shared/vendor/           # pinned ljm_constants.json (addresses resolved at code
 src/tbctl/               # the node: config, hw, services, api, cli
 lua/                     # the frozen T7 Lua interpreter + CRC
 frontend/                # React + TypeScript + Vite dashboard
-configs/                 # channels.yaml, sequences/, dashboards/
+configs/                 # channels.yaml, sequences/, dashboards/ (EXAMPLES — see TODO.md)
 tests/                   # pytest + golden CRC vectors + Lua harness
 ```
 
@@ -50,6 +57,29 @@ cd frontend && npm install && npm run dev    # dashboard on :5173 (proxies to :8
 
 Or build the frontend once (`npm run build`) and the node serves it itself
 at `http://localhost:8000/`.
+
+In `--sim`, `configs/sim.yaml` adds a simple chamber model: firing
+`hotfire_v1` gives a real Pc start-up, plateau and shutdown (thrust and
+manifold pressures follow), cold flows give a small back-pressure, and no
+igniter means no ignition. Arming `hotfire_v1` needs the N2 purge
+precondition first: `curl -X POST localhost:8000/api/sim/set -H
+'Content-Type: application/json' -d '{"tag":"pressure.n2_purge","value":9.5}'`.
+
+## Analysis in hopper-test-lab
+
+Each closed run has two extra downloads in the sidebar (`htl⬇`, `map⬇`),
+also available as `GET /api/runs/{id}/export/hopper.csv` /
+`hopper-channel-map.json` and `uv run tbctl export-hopper data/runs/*.h5`:
+
+- a wide CSV hopper-test-lab's **Imports** reads as-is (absolute time,
+  test case ID = run ID, valve edges for ignition delay), and
+- a hopper channel map (names, units, channel types) to load once per
+  channel configuration.
+
+Channel `name`s (P&ID IDs such as `PT-CC-01`), sequence `test_type`s
+(`engine` / `igniter` / `cold_flow`) and run outcomes (`pass` / `anomaly` /
+`fail` / `void`) use hopper-test-lab's vocabulary. Contract and workflow:
+`docs/hopper-test-lab.md`; numpy/pandas access: `docs/analysis.md`.
 
 ## Deployment
 

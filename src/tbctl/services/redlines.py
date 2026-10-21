@@ -7,7 +7,7 @@ sequencer's ABORT — the same always-accepted fastest path as the operator
 button — plus an event.
 
 This is deliberately a monitoring layer ABOVE the Lua safety chain: the T7
-still enforces heartbeat, spark guard and the abort table autonomously.
+still enforces heartbeat, igniter guard and the abort table autonomously.
 Redline reaction time is bounded by the 50 Hz sample rate plus one stream
 block (~100 ms worst case), which is the right tool for tank overpressure
 or wall temperature — not a replacement for the 1 ms Lua guards.

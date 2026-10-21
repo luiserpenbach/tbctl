@@ -2,8 +2,10 @@
 
 ## Cursor Cloud specific instructions
 
-`tbctl` is a single-product repo for rocket/thruster test-bench control (DAQ +
-valve control + deterministic firing sequences). It runs fully **hardware-free**
+`tbctl` is a single-product repo for Hopper test-bench and mission control (H2
+lander, Aldenhoven test bench: DAQ + valve control + deterministic firing
+sequences). Recorded runs are analysed in hopper-test-lab
+(`docs/hopper-test-lab.md`); keep the export contract there in sync. It runs fully **hardware-free**
 via a built-in simulator (`--sim`), which is how it is developed and tested in
 this environment. No database or other external backing service is required —
 runs are written to HDF5 files on local disk.
@@ -53,3 +55,6 @@ Standard commands live in `README.md` (dev/simulator) and `docs/deployment.md`
   `POST /api/sim/set {"tag":"pressure.ox_tank","value":9.0}` (this endpoint only
   exists when the node is started with `--sim`), otherwise arming fails with
   "preconditions failed".
+- `configs/sim.yaml` (optional, `--sim` only) is a first-order chamber model
+  in `ChamberSim` (`src/tbctl/hw/ljm_mock.py`). It adds to `sim/set`
+  setpoints, so tests that set values by hand are unaffected.

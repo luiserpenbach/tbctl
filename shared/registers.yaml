@@ -102,7 +102,7 @@ enums:
     HB_TIMEOUT: 1
     HOST_ABORT: 2
     BAD_TABLE: 3
-    SPARK_GUARD: 4
+    IGNITER_GUARD: 4
     OVERRUN: 5
 
 # ---------------------------------------------------------------------------
@@ -111,13 +111,13 @@ enums:
 constants:
   arm_magic: 0xA55A
   default_hb_timeout_ms: 500
-  default_spark_guard_ms: 2000
+  default_igniter_guard_ms: 2000
   tick_ms: 1               # Lua LJ.IntervalConfig period
   max_steps: 128           # per table (main and abort each)
   min_step_spacing_ms: 2
   step_bytes: 6            # t_ms u32 + dio_word u16
-  # NOTE: header extended from the original §5 spec (10 B) by spark_mask u16
-  # (12 B total) — the D9 spark guard needs to know which DIO bit is the
-  # spark line, and the mask must live inside the CRC-protected region.
+  # NOTE: header extended from the original §5 spec (10 B) by igniter_mask u16
+  # (12 B total) — the D9 igniter guard needs to know which DIO bit is the
+  # igniter line, and the mask must live inside the CRC-protected region.
   header_bytes: 12
   trailer_bytes: 2

@@ -4,9 +4,12 @@ Per-run HDF5 on disk is the source of truth. Layout:
 
     /                       attrs: schema_version, run metadata, config SHAs,
                             interp_version, tbctl git hash, UTC timestamps,
-                            per-group sample counts (accounting for §10.4)
+                            per-group sample counts (accounting for §10.4),
+                            channels_json (tag/name/kind/unit per channel),
+                            sequence + test_type of the last fired sequence
     /groups/<rate_group>/t     (N,)     f8   epoch seconds
-    /groups/<rate_group>/data  (N, nch) f8   engineering units
+    /groups/<rate_group>/data  (N, nch) f8   engineering units; outputs
+                                             (valve/igniter) as 0/1 open/on
                             attrs: tags, rate_hz
     /events                 vlen str, JSON records mirrored from the event log
 
@@ -22,7 +25,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,8 +39,30 @@ from tbctl.services.acquisition import AcquisitionService, envelope_decimate
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: channels_json, sequence/test_type, output state columns
 FLUSH_INTERVAL_S = 0.5
+
+# Run outcomes use hopper-test-lab's stored values (labels there: Nominal,
+# Off-nominal, Failed, Invalid). Older run files said good / scrub.
+_LEGACY_OUTCOMES = {"good": "pass", "scrub": "void"}
+
+
+def describe_channels(chmap: ChannelMap) -> list[dict]:
+    """Format-neutral channel description stored in every run file, so a
+    run can be exported long after channels.yaml has changed."""
+    out = []
+    for c in chmap.channels:
+        unit = getattr(c, "unit", "")
+        out.append(
+            {
+                "tag": c.tag,
+                "name": c.name,
+                "kind": c.kind,
+                "unit": unit,
+                "hw": getattr(c, "hw", "calc"),
+            }
+        )
+    return out
 
 
 class RecorderError(Exception):
@@ -89,6 +114,7 @@ class Recorder:
         self._unsubscribe = None
         self._flush_task: asyncio.Task | None = None
         self.sequence_sha256: str = ""  # set by the sequencer when a table is loaded
+        self._fired: dict[str, str] = {}  # sequence/test_type fired during the run
         # called (blocking, in a thread) with the RunInfo after the file is
         # closed — used for post-run review report generation
         self.on_stop: Callable[[RunInfo], None] | None = None
@@ -121,6 +147,7 @@ class Recorder:
                 "tbctl_git_hash": self._git_hash,
                 "t_start": t0,
                 "t_start_utc": datetime.fromtimestamp(t0, UTC).isoformat(),
+                "channels_json": json.dumps(describe_channels(self._chmap)),
             }
         )
         grp = f.create_group("groups")
@@ -141,6 +168,7 @@ class Recorder:
         self._run = RunInfo(run_id, path, name, operator, notes, t0)
         self._pending = {g: [] for g in self._acq.rings}
         self._pending_events = []
+        self._fired = {}
         self._unsubscribe = self._acq.add_listener(self._on_block)
         self._flush_task = asyncio.create_task(self._flush_loop(), name="recorder-flush")
         log.info("run %s started -> %s", run_id, path)
@@ -167,6 +195,8 @@ class Recorder:
         f.attrs["t_stop"] = run.t_stop
         f.attrs["t_stop_utc"] = datetime.fromtimestamp(run.t_stop, UTC).isoformat()
         f.attrs["sample_counts"] = json.dumps(run.sample_counts)
+        for key, value in self._fired.items():
+            f.attrs[key] = value
         await asyncio.to_thread(f.close)
         self._file = None
         self._run = None
@@ -187,6 +217,11 @@ class Recorder:
         """EventLog sink: mirror events into the active run file."""
         if self._run is not None:
             self._pending_events.append(json.dumps(record))
+            if record.get("event") == "seq_fired":
+                self._fired = {
+                    "sequence": str(record.get("sequence", "")),
+                    "test_type": str(record.get("test_type") or ""),
+                }
 
     async def _flush_loop(self) -> None:
         while True:
@@ -304,26 +339,8 @@ class Recorder:
                 else:
                     raise KeyError(f"tag {tag!r} not in run {run_id!r}")
 
-        all_t = (
-            np.unique(np.concatenate([t for t, _ in series])) if series else np.empty(0, dtype="f8")
-        )
-        # per-tag positions where its timestamps land in the union timeline
-        cols: list[tuple[np.ndarray, np.ndarray]] = [
-            (np.searchsorted(all_t, t), v) for t, v in series
-        ]
         yield "t_epoch," + ",".join(tags) + "\n"
-        cells = np.full((len(all_t), len(tags)), "", dtype=object)
-        for j, (idx, v) in enumerate(cols):
-            for k in range(len(idx)):
-                cells[idx[k], j] = repr(float(v[k]))
-        chunk: list[str] = []
-        for i in range(len(all_t)):
-            chunk.append(f"{all_t[i]:.6f}," + ",".join(cells[i]) + "\n")
-            if len(chunk) >= 2000:
-                yield "".join(chunk)
-                chunk = []
-        if chunk:
-            yield "".join(chunk)
+        yield from union_rows(series, lambda t: f"{t:.6f},", lambda v: repr(float(v)))
 
     def run_data(
         self,
@@ -354,6 +371,31 @@ class Recorder:
         return out
 
 
+def union_rows(
+    series: list[tuple[np.ndarray, np.ndarray]],
+    time_cell: Callable[[float], str],
+    value_cell: Callable[[float], str],
+) -> Iterator[str]:
+    """CSV data lines (chunked) for several series on the union of their
+    timebases; cells stay blank where a series has no sample at that time.
+    `time_cell` renders the leading cell(s) of a row, including the comma."""
+    all_t = np.unique(np.concatenate([t for t, _ in series])) if series else np.empty(0, dtype="f8")
+    cells = np.full((len(all_t), len(series)), "", dtype=object)
+    for j, (t, v) in enumerate(series):
+        # positions where this series' timestamps land in the union timeline
+        idx = np.searchsorted(all_t, t)
+        for k in range(len(idx)):
+            cells[idx[k], j] = value_cell(v[k])
+    chunk: list[str] = []
+    for i in range(len(all_t)):
+        chunk.append(time_cell(float(all_t[i])) + ",".join(cells[i]) + "\n")
+        if len(chunk) >= 2000:
+            yield "".join(chunk)
+            chunk = []
+    if chunk:
+        yield "".join(chunk)
+
+
 def _meta_from(f: h5py.File, path: Path) -> dict:
     attrs = dict(f.attrs)
     counts = attrs.get("sample_counts")
@@ -365,10 +407,13 @@ def _meta_from(f: h5py.File, path: Path) -> dict:
     if raw := attrs.get("user_meta"):
         with contextlib.suppress(Exception):
             user_meta = json.loads(raw)
+    outcome = user_meta.get("outcome")
     return {
         "report_summary": report_summary,
         "tags": user_meta.get("tags", []),
-        "outcome": user_meta.get("outcome"),
+        "outcome": _LEGACY_OUTCOMES.get(outcome, outcome),
+        "sequence": str(attrs.get("sequence", "")),
+        "test_type": str(attrs.get("test_type", "")),
         "run_id": str(attrs.get("run_id", path.stem)),
         "name": str(attrs.get("name", "")),
         "operator": str(attrs.get("operator", "")),

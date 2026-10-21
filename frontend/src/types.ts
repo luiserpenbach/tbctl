@@ -2,8 +2,10 @@
 
 export interface ChannelInfo {
   tag: string;
+  /** P&ID / display name (e.g. PT-CC-01); "" = use the tag. */
+  name?: string;
   hw: string;
-  kind: "analog_in" | "thermocouple_k" | "valve" | "spark" | "derived";
+  kind: "analog_in" | "thermocouple_k" | "valve" | "igniter" | "derived";
   unit?: string;
   rate_group?: string;
   rate_hz?: number;
@@ -103,6 +105,17 @@ export interface PanelConfig {
   show_legend?: boolean;
 }
 
+/** Run outcome, stored values as in hopper-test-lab. */
+export type Outcome = "pass" | "anomaly" | "fail" | "void";
+
+/** hopper-test-lab labels for the stored outcome values. */
+export const OUTCOME_LABEL: Record<Outcome, string> = {
+  pass: "Nominal",
+  anomaly: "Off-nominal",
+  fail: "Failed",
+  void: "Invalid",
+};
+
 export interface RunMeta {
   run_id: string;
   name: string;
@@ -113,7 +126,10 @@ export interface RunMeta {
   sample_counts: Record<string, number>;
   size_bytes?: number;
   tags?: string[];
-  outcome?: "good" | "anomaly" | "scrub" | null;
+  outcome?: Outcome | null;
+  /** last sequence fired during the run, and its hopper-test-lab test type */
+  sequence?: string;
+  test_type?: "engine" | "igniter" | "cold_flow" | "";
   report_summary?: { total: number; passed: number; failed: number; skipped: number } | null;
 }
 

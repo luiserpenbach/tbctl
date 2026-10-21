@@ -68,7 +68,8 @@ class ChecklistCheck(BaseModel):
 class RunMetaPatch(BaseModel):
     tags: list[str] | None = None
     # outcome: set to a value, or explicitly null to clear; omit = untouched
-    outcome: Literal["good", "anomaly", "scrub"] | None = None
+    # hopper-test-lab values: Nominal / Off-nominal / Failed / Invalid
+    outcome: Literal["pass", "anomaly", "fail", "void"] | None = None
     clear_outcome: bool = False
 
 
@@ -165,6 +166,7 @@ def build_router(ctx: NodeContext) -> APIRouter:
                 out.append(
                     {
                         "tag": c.tag,
+                        "name": c.name,
                         "hw": "calc",
                         "kind": c.kind,
                         "unit": c.unit,
@@ -174,7 +176,7 @@ def build_router(ctx: NodeContext) -> APIRouter:
                     }
                 )
                 continue
-            entry: dict = {"tag": c.tag, "hw": c.hw, "kind": c.kind}
+            entry: dict = {"tag": c.tag, "name": c.name, "hw": c.hw, "kind": c.kind}
             if c.kind in ("analog_in", "thermocouple_k"):
                 entry["unit"] = c.unit
                 entry["rate_group"] = c.rate_group
@@ -454,7 +456,7 @@ def build_router(ctx: NodeContext) -> APIRouter:
 
     @r.patch("/runs/{run_id}/meta")
     def run_meta_patch(run_id: str, body: RunMetaPatch) -> dict:
-        """Mutable review metadata: tags + outcome (good/anomaly/scrub)."""
+        """Mutable review metadata: tags + outcome (pass/anomaly/fail/void)."""
         from tbctl.services.recorder import RecorderError
 
         try:
@@ -592,6 +594,38 @@ def build_router(ctx: NodeContext) -> APIRouter:
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{run_id}.csv"'},
         )
+
+    def _closed_run_path(run_id: str):
+        from tbctl.services.recorder import RecorderError
+
+        try:
+            return ctx.recorder.run_path(run_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e)) from e
+        except RecorderError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @r.get("/runs/{run_id}/export/hopper.csv")
+    def run_export_hopper_csv(run_id: str):
+        """Whole run as hopper-test-lab wide CSV (docs/hopper-test-lab.md)."""
+        from fastapi.responses import StreamingResponse
+
+        from tbctl.services import hopper
+
+        path = _closed_run_path(run_id)
+        return StreamingResponse(
+            hopper.csv_rows(path),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.hopper.csv"'},
+        )
+
+    @r.get("/runs/{run_id}/export/hopper-channel-map.json")
+    def run_export_hopper_channel_map(run_id: str) -> dict:
+        """hopper-test-lab channel map for the run's channels (POST it to
+        hopper's /api/channel-maps, or keep it with the CSV)."""
+        from tbctl.services import hopper
+
+        return hopper.run_channel_map(_closed_run_path(run_id))
 
     @r.get("/runs/{run_id}/data")
     def run_data(

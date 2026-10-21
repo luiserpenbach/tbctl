@@ -37,6 +37,7 @@ async def test_record_and_reopen(rig):
     _mock, _acq, rec, events = rig
     run = await rec.start_run("coldflow test", "luis", "first shakedown")
     events.log("arm", sequence="coldflow_v1")
+    events.log("seq_fired", sequence="coldflow_v1", test_type="cold_flow")
     await asyncio.sleep(1.2)
     stopped = await rec.stop_run()
 
@@ -44,13 +45,19 @@ async def test_record_and_reopen(rig):
     assert stopped.sample_counts["default"] > 30  # ~1.2 s @ 50 Hz
 
     with h5py.File(run.path, "r") as f:
-        assert f.attrs["schema_version"] == 1
+        assert f.attrs["schema_version"] == 2
+        assert f.attrs["sequence"] == "coldflow_v1"
+        assert f.attrs["test_type"] == "cold_flow"
+        chans = {c["tag"]: c for c in json.loads(f.attrs["channels_json"])}
+        assert chans["pressure.chamber"]["unit"] == "bar"
+        assert chans["igniter.main"]["kind"] == "igniter"
         assert f.attrs["operator"] == "luis"
         assert f.attrs["tbctl_git_hash"] == "deadbeef"
         assert len(f.attrs["channels_sha256"]) == 64
         assert f.attrs["interp_version"] == 1
         g = f["groups"]["default"]
         assert list(g.attrs["tags"])
+        assert "valve.ox_main" in list(g.attrs["tags"])  # output states recorded
         assert g["t"].shape[0] == g["data"].shape[0] == stopped.sample_counts["default"]
         # timestamps strictly increasing at ~50 Hz
         t = g["t"][:]
@@ -62,6 +69,7 @@ async def test_record_and_reopen(rig):
     # historical API
     metas = rec.list_runs()
     assert metas[0]["run_id"] == run.run_id
+    assert metas[0]["test_type"] == "cold_flow"
     assert metas[0]["sample_counts"]["default"] > 30
     data = rec.run_data(run.run_id, ["pressure.chamber"], max_points=50)
     series = data["pressure.chamber"]

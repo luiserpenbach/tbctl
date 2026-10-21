@@ -64,20 +64,20 @@ async def test_run_lifecycle_via_api(client):
 
 
 async def test_dashboard_save(client):
-    dash = (await client.get("/api/dashboards/hotfire_main")).json()
+    dash = (await client.get("/api/dashboards/main")).json()
     dash["panels"][0]["w"] = 6
-    r = await client.post("/api/dashboards/hotfire_main", json=dash)
+    r = await client.post("/api/dashboards/main", json=dash)
     assert r.status_code == 200
-    again = (await client.get("/api/dashboards/hotfire_main")).json()
+    again = (await client.get("/api/dashboards/main")).json()
     assert again["panels"][0]["w"] == 6
 
     dash["panels"][0]["x"] = 99  # overflows grid -> 422
-    assert (await client.post("/api/dashboards/hotfire_main", json=dash)).status_code == 422
+    assert (await client.post("/api/dashboards/main", json=dash)).status_code == 422
 
 
 async def test_dashboard_create_and_delete(client):
     # last remaining dashboard cannot be deleted
-    assert (await client.delete("/api/dashboards/hotfire_main")).status_code == 409
+    assert (await client.delete("/api/dashboards/main")).status_code == 409
     body = {"name": "scratch", "grid": {"cols": 12, "row_height_px": 40}, "panels": []}
     assert (await client.post("/api/dashboards/scratch", json=body)).status_code == 200
     names = (await client.get("/api/dashboards")).json()["dashboards"]

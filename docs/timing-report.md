@@ -1,5 +1,10 @@
 # tbctl Hardware Acceptance — Timing Report (§10.3)
 
+> Historical record from the previous bench (2026-08-02). It predates the
+> `spark` → `igniter` rename: "Spark guard" / `SPARK_GUARD` below is today's
+> igniter guard / `IGNITER_GUARD` (error code 4, same Lua logic). Re-run for
+> the Hopper hardware is tracked in `TODO.md`.
+
 > **Status: EXECUTED 2026-08-02 (USB software proxy) — re-run required.**
 > Edge timing via USB `DIO_STATE` poll — **not** a logic analyzer. Re-run
 > with LA on FIO4/FIO5 for sign-off. Two failures were traced and fixed
