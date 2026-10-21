@@ -79,7 +79,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const overlayRuns = useStore((s) => s.overlayRuns);
   const toggleOverlayRun = useStore((s) => s.toggleOverlayRun);
   const tags = panel.channels;
-  const scheme = useColorScheme(); // rebuild the plot when the OS theme flips
+  const scheme = useColorScheme(); // rebuild the plot when the theme flips
   const isHistory = viewMode.mode === "run";
   const markersRef = useRef<Marker[]>([]);
   const [windowS, setWindowS] = useState(panel.window_s ?? DEFAULT_WINDOW_S);
