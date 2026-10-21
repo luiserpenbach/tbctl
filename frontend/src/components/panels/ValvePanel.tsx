@@ -40,9 +40,13 @@ export function ValvePanel() {
           const [aLabel, bLabel] = isValve ? ["open", "close"] : ["on", "off"];
           const activeNow = state === "open" || state === "on";
           return (
-            <div key={c.tag} className={`valve-cell ${state}`} title={`${c.hw} (bit ${c.bit})`}>
-              <div className="name">{c.tag}</div>
+            <div key={c.tag} className={`valve-cell ${state}`} title={`${c.tag} · ${c.hw} (bit ${c.bit})`}>
+              <div className="vhead">
+                <span className="name">{c.name || c.tag}</span>
+                <span className="led" />
+              </div>
               <div className="state">{state.toUpperCase()}</div>
+              <div className="sub">{c.name ? c.tag : c.hw}</div>
               <div className="valve-btns">
                 <button
                   className="btn"
@@ -64,11 +68,15 @@ export function ValvePanel() {
         })}
       </div>
       {!canActuate && (
-        <div style={{ fontSize: 10, color: "var(--text-faint)", padding: "2px 8px" }}>
-          {status.control_enabled ? `locked: sequencer ${seqState}` : "control mode disabled"}
+        <div className="panel-foot">
+          <svg className="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <rect x="5" y="11" width="14" height="9" rx="2" />
+            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+          </svg>
+          {status.control_enabled ? `Locked while sequencer is ${seqState}` : "Manual control locked — switch Control to Live"}
         </div>
       )}
-      {err && <div style={{ color: "var(--red)", fontSize: 11, padding: "0 8px 4px" }}>{err}</div>}
+      {err && <div className="err-text" style={{ padding: "0 12px 6px" }}>{err}</div>}
     </div>
   );
 }

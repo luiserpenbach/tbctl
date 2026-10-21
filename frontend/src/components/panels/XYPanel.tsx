@@ -93,12 +93,12 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
       const padB = 26;
       const plotW = w - pad - padR;
       const plotH = h - padT - padB;
-      ctx.strokeStyle = "#262626";
+      ctx.strokeStyle = "rgba(150, 180, 220, 0.12)";
       ctx.lineWidth = 1;
       ctx.strokeRect(pad, padT, plotW, plotH);
 
       ctx.font = "9.5px 'IBM Plex Mono', monospace";
-      ctx.fillStyle = "#5c5c62";
+      ctx.fillStyle = "#586375";
       if (xs.length < 2) {
         ctx.textAlign = "center";
         ctx.fillText("waiting for data…", w / 2, h / 2);
@@ -119,14 +119,14 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
       const sy = (v: number) => padT + plotH - ((v - ymin) / (ymax - ymin)) * plotH;
 
       // axis labels: min/max + channel names
-      ctx.fillStyle = "#9e9ea4";
+      ctx.fillStyle = "#95a1b3";
       ctx.textAlign = "left";
       ctx.fillText(ymax.toFixed(1), 4, padT + 8);
       ctx.fillText(ymin.toFixed(1), 4, padT + plotH);
       ctx.textAlign = "center";
       ctx.fillText(xmin.toFixed(1), pad, h - 12);
       ctx.fillText(xmax.toFixed(1), pad + plotW, h - 12);
-      ctx.fillStyle = "#5c5c62";
+      ctx.fillStyle = "#586375";
       ctx.fillText(`${xTag} [${unitOf(xTag)}]`, pad + plotW / 2, h - 2);
       ctx.save();
       ctx.translate(10, padT + plotH / 2);
@@ -137,7 +137,7 @@ export function XYPanel({ panel }: { panel: PanelConfig }) {
       // points: newest brightest (live), uniform in run mode
       for (let i = 0; i < xs.length; i++) {
         const age = isHistory ? 0.35 : 1 - i / xs.length;
-        ctx.fillStyle = `rgba(74, 158, 255, ${Math.max(0.15, 0.9 - age * 0.75)})`;
+        ctx.fillStyle = `rgba(57, 135, 229, ${Math.max(0.15, 0.9 - age * 0.75)})`;
         ctx.fillRect(sx(xs[i]) - 1.25, sy(ys[i]) - 1.25, 2.5, 2.5);
       }
     };

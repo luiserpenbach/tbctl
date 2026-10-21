@@ -73,13 +73,10 @@ export function Sidebar() {
           />
         )}
         <div
-          className="chan"
-          style={{ cursor: "pointer" }}
+          className={`chan run live-row ${viewMode.mode === "live" ? "active" : ""}`}
           onClick={() => setViewMode({ mode: "live" })}
         >
-          <span style={{ color: viewMode.mode === "live" ? "var(--accent)" : undefined }}>
-            ▶ live
-          </span>
+          <span>● Live telemetry</span>
         </div>
         {runs
           .filter((r) => {
@@ -100,12 +97,18 @@ export function Sidebar() {
           return (
             <div
               key={r.run_id}
-              className="chan"
-              style={{ cursor: "pointer" }}
+              className={`chan run ${active ? "active" : ""}`}
               title={`${r.operator} — ${r.notes}${r.tags?.length ? ` · ${r.tags.join(", ")}` : ""}`}
               onClick={() => setViewMode({ mode: "run", run: r })}
             >
-              <span style={{ color: active ? "var(--accent)" : overlaid ? "var(--amber)" : undefined }}>
+              <span
+                style={{
+                  color: overlaid && !active ? "var(--amber)" : undefined,
+                  minWidth: 0,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
                 {outcomeColor && (
                   <span
                     style={{ color: outcomeColor, marginRight: 4 }}
@@ -114,8 +117,9 @@ export function Sidebar() {
                     ●
                   </span>
                 )}
-                {r.run_id}
+                <RunLabel runId={r.run_id} />
               </span>
+              <span className="run-links">
               {viewMode.mode === "run" && !active && (
                 <a
                   className="csv-link"
@@ -161,6 +165,7 @@ export function Sidebar() {
               >
                 map⬇
               </a>
+              </span>
             </div>
           );
         })}
@@ -175,6 +180,7 @@ export function Sidebar() {
                 const val = isOutput
                   ? (status?.outputs[c.tag] ?? "—")
                   : fmt(buffers.latest(c.tag));
+                const lit = val === "open" || val === "on";
                 return (
                   <div
                     key={c.tag}
@@ -182,8 +188,9 @@ export function Sidebar() {
                     title={c.name ? `${c.name} · ${c.hw}` : c.hw}
                   >
                     <span>{c.tag.slice(ns.length + 1)}</span>
-                    <span className="val">
-                      {val} {c.unit ?? ""}
+                    <span className={`val ${isOutput ? (lit ? "on" : "off") : ""}`}>
+                      {val}
+                      {!isOutput && c.unit && <span className="unit">{c.unit}</span>}
                     </span>
                   </div>
                 );
@@ -193,6 +200,20 @@ export function Sidebar() {
       </div>
       <EventFeed />
     </aside>
+  );
+}
+
+/** run ids are `YYYYMMDD-HHMMSS-name`: show the name, with date + time small */
+function RunLabel({ runId }: { runId: string }) {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}-(.*)$/.exec(runId);
+  if (!m) return <span className="run-name">{runId}</span>;
+  return (
+    <span className="run-label">
+      <span className="run-name">{m[6]}</span>
+      <span className="run-when">
+        {m[2]}-{m[3]} {m[4]}:{m[5]}
+      </span>
+    </span>
   );
 }
 
