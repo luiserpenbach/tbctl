@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { abortSequence, fetchStatus, saveDashboard, setControlMode } from "../api";
 import { useStore } from "../store";
+import { getThemePref, setThemePref, type ThemePref } from "../theme-pref";
 import { ConnectionModal } from "./ConnectionModal";
 
 type View = "dashboard" | "channels" | "sequences" | "pid";
@@ -35,6 +36,49 @@ function HopperMark() {
       <path d="M8.5 11.5 4.5 18.5M15.5 11.5l4 7M2.8 18.5h3.4M17.8 18.5h3.4M12 11.5v1.5" />
       <path d="M10.5 13.5h3L12 21z" fill="currentColor" stroke="none" opacity="0.55" />
     </svg>
+  );
+}
+
+const THEME_ICONS: Record<ThemePref, React.ReactNode> = {
+  light: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </svg>
+  ),
+  system: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" />
+    </svg>
+  ),
+  dark: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
+    </svg>
+  ),
+};
+
+function ThemeSwitch() {
+  const [pref, setPref] = useState<ThemePref>(getThemePref);
+  return (
+    <div className="theme-switch" role="group" aria-label="theme">
+      {(["light", "system", "dark"] as const).map((p) => (
+        <button
+          key={p}
+          type="button"
+          className={pref === p ? "active" : ""}
+          aria-pressed={pref === p}
+          title={p === "system" ? "Theme: follow the system" : `Theme: ${p}`}
+          onClick={() => {
+            setThemePref(p);
+            setPref(p);
+          }}
+        >
+          {THEME_ICONS[p]}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -187,6 +231,7 @@ export function StatusBar() {
         </button>
       )}
       {connOpen && <ConnectionModal onClose={() => setConnOpen(false)} />}
+      <ThemeSwitch />
       {editMode && dashboard && (
         <button
           className="btn primary"
