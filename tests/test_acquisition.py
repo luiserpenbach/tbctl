@@ -123,3 +123,25 @@ def test_mock_dio_and_manual_valve(chmap):
     mock.write_name("FIO0", 1)
     assert mock.read_name("FIO0") == 1.0
     assert mock.dio_word16() & 1
+
+
+def test_ring_reads_match_brute_force_across_wraps():
+    """window()/latest() index the ring in place; check them against the
+    time-ordered contents for many fill levels, including wrapped ones."""
+    rng = np.random.default_rng(7)
+    ring = RingBuffer(["a", "b"], rate_hz=10, capacity_s=5)  # 50 rows
+    all_t, all_v = np.empty(0), np.empty((0, 2))
+    t_next = 0.0
+    for _ in range(40):
+        n = int(rng.integers(1, 23))
+        t = t_next + np.arange(n) * 0.1
+        t_next = t[-1] + 0.1
+        v = rng.random((n, 2))
+        ring.append(t, v)
+        all_t, all_v = np.concatenate([all_t, t])[-50:], np.concatenate([all_v, v])[-50:]
+        assert ring.latest() == {"a": all_v[-1, 0], "b": all_v[-1, 1]}
+        for t0, t1 in [(-1.0, None), (all_t[0], None), (all_t[-5], all_t[-2]), (all_t[-1], None)]:
+            got_t, got_v = ring.window(t0, t1)
+            keep = (all_t > t0) & ((all_t <= t1) if t1 is not None else True)
+            np.testing.assert_array_equal(got_t, all_t[keep])
+            np.testing.assert_array_equal(got_v, all_v[keep])

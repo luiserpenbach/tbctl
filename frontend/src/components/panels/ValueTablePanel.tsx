@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { buffers, onTick } from "../../databuf";
+import { useMemo } from "react";
+import { buffers } from "../../databuf";
+import { LiveValue } from "../LiveValue";
 import { useStore } from "../../store";
 import { isReadable, type PanelConfig } from "../../types";
 
@@ -8,10 +9,20 @@ function globToRegex(glob: string): RegExp {
   return new RegExp(`^${esc}$`);
 }
 
+const fmt = (v: number | null) => (v === null ? "—" : v.toFixed(2));
+
+// grey the whole row out when its channel stops updating
+const markStale = (tag: string) => (el: HTMLSpanElement) => {
+  const row = el.closest("tr");
+  const stale = buffers.isStale(tag);
+  if (row && row.classList.contains("stale") !== stale) {
+    row.classList.toggle("stale", stale);
+    row.title = stale ? "no fresh data" : "";
+  }
+};
+
 export function ValueTablePanel({ panel }: { panel: PanelConfig }) {
   const channels = useStore((s) => s.channels);
-  const [, setTick] = useState(0);
-  useEffect(() => onTick(() => setTick((t) => t + 1)), []);
 
   const tags = useMemo(() => {
     const inputs = channels.filter(isReadable);
@@ -23,20 +34,18 @@ export function ValueTablePanel({ panel }: { panel: PanelConfig }) {
     <div style={{ overflowY: "auto", height: "100%" }}>
       <table className="value-table">
         <tbody>
-          {tags.map((c) => {
-            const v = buffers.latest(c.tag);
-            const stale = buffers.isStale(c.tag);
-            return (
-              <tr key={c.tag} className={stale ? "stale" : ""} title={stale ? "no fresh data" : ""}>
-                <td className="tag">
-                  {c.tag}
-                  {c.name && <span className="cname">{c.name}</span>}
-                </td>
-                <td className="val">{v === null ? "—" : v.toFixed(2)}</td>
-                <td className="unit">{c.unit}</td>
-              </tr>
-            );
-          })}
+          {tags.map((c) => (
+            <tr key={c.tag}>
+              <td className="tag">
+                {c.tag}
+                {c.name && <span className="cname">{c.name}</span>}
+              </td>
+              <td className="val">
+                <LiveValue tag={c.tag} format={fmt} onUpdate={markStale(c.tag)} />
+              </td>
+              <td className="unit">{c.unit}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
