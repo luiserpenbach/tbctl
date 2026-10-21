@@ -58,6 +58,13 @@ cd frontend && npm install && npm run dev    # dashboard on :5173 (proxies to :8
 Or build the frontend once (`npm run build`) and the node serves it itself
 at `http://localhost:8000/`.
 
+In `--sim`, `configs/sim.yaml` adds a simple chamber model: firing
+`hotfire_v1` gives a real Pc start-up, plateau and shutdown (thrust and
+manifold pressures follow), cold flows give a small back-pressure, and no
+igniter means no ignition. Arming `hotfire_v1` needs the N2 purge
+precondition first: `curl -X POST localhost:8000/api/sim/set -H
+'Content-Type: application/json' -d '{"tag":"pressure.n2_purge","value":9.5}'`.
+
 ## Analysis in hopper-test-lab
 
 Each closed run has two extra downloads in the sidebar (`htl⬇`, `map⬇`),

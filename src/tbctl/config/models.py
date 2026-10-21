@@ -615,6 +615,67 @@ def cross_validate_pid(pid: PidConfig, chmap: ChannelMap) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Simulator plant model (configs/sim.yaml, --sim only; hardware never reads
+# it). A first-order chamber: lights when both propellant valves are open and
+# the igniter has been on, then Pc lags to pc_bar; thrust and manifold
+# pressures follow Pc. Contributions add to the /api/sim/set setpoints.
+# ---------------------------------------------------------------------------
+
+
+class SimThrust(StrictModel):
+    tag: str
+    n_per_bar: float = Field(gt=0)
+
+
+class SimManifold(StrictModel):
+    tag: str
+    valve: str
+    dp_frac: float = Field(default=0.2, ge=0, le=5)  # injector dp as a fraction of Pc
+
+
+class SimChamber(StrictModel):
+    tag: str  # chamber pressure input
+    ox_valve: str
+    fuel_valve: str
+    igniter: str | None = None  # None = lights without one (e.g. hypergolic)
+    pc_bar: float = Field(gt=0)  # steady state above the setpoint, while lit
+    cold_flow_bar: float = Field(default=1.0, ge=0)  # propellant flowing, not lit
+    ignition_delay_ms: int = Field(default=80, ge=0, le=5000)
+    rise_ms: float = Field(default=40.0, gt=0, le=10000)  # time constants
+    decay_ms: float = Field(default=60.0, gt=0, le=10000)
+    roughness: float = Field(default=0.02, ge=0, le=0.5)  # fractional noise while lit
+    thrust: SimThrust | None = None
+    manifolds: list[SimManifold] = []
+
+
+class SimConfig(StrictModel):
+    chamber: SimChamber | None = None
+
+
+def cross_validate_sim(cfg: SimConfig, chmap: ChannelMap) -> list[str]:
+    c = cfg.chamber
+    if c is None:
+        return []
+    inputs = {ch.tag for ch in chmap.inputs()}
+    valves = {ch.tag for ch in chmap.outputs() if isinstance(ch, ValveChannel)}
+    igniters = {ch.tag for ch in chmap.igniter_channels()}
+    errors = []
+    want = [("tag", c.tag, inputs, "input"), ("ox_valve", c.ox_valve, valves, "valve")]
+    want += [("fuel_valve", c.fuel_valve, valves, "valve")]
+    if c.igniter is not None:
+        want.append(("igniter", c.igniter, igniters, "igniter"))
+    if c.thrust is not None:
+        want.append(("thrust.tag", c.thrust.tag, inputs, "input"))
+    for i, m in enumerate(c.manifolds):
+        want += [(f"manifolds[{i}].tag", m.tag, inputs, "input")]
+        want += [(f"manifolds[{i}].valve", m.valve, valves, "valve")]
+    for field_name, tag, allowed, what in want:
+        if tag not in allowed:
+            errors.append(f"chamber.{field_name}: {tag!r} is not an {what} channel")
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # §4.3 dashboard
 # ---------------------------------------------------------------------------
 

@@ -19,7 +19,7 @@ from typing import Literal
 
 import numpy as np
 
-from tbctl.config.models import ChannelMap
+from tbctl.config.models import ChannelMap, SimConfig
 from tbctl.services.acquisition import AcquisitionService
 from tbctl.services.events import EventLog
 
@@ -110,8 +110,10 @@ class DeviceManager:
         acq: AcquisitionService,
         events: EventLog,
         mode: Mode,
+        sim_plant: SimConfig | None = None,
     ):
         self._chmap = chmap
+        self._sim_plant = sim_plant  # configs/sim.yaml, for every MockDevice we build
         self.device = device
         self._acq = acq
         self._events = events
@@ -134,7 +136,7 @@ class DeviceManager:
         from tbctl.hw.ljm_mock import MockDevice
 
         old = self.device.backend
-        new = MockDevice(self._chmap)
+        new = MockDevice(self._chmap, plant=self._sim_plant)
         new.open()
         self.device.backend = new
         with contextlib.suppress(Exception):
@@ -144,7 +146,7 @@ class DeviceManager:
         if mode == "sim":
             from tbctl.hw.ljm_mock import MockDevice
 
-            return MockDevice(self._chmap)
+            return MockDevice(self._chmap, plant=self._sim_plant)
         from tbctl.hw.ljm_iface import LjmDevice
 
         if mode == "usb":

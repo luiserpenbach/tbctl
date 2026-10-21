@@ -55,3 +55,6 @@ Standard commands live in `README.md` (dev/simulator) and `docs/deployment.md`
   `POST /api/sim/set {"tag":"pressure.ox_tank","value":9.0}` (this endpoint only
   exists when the node is started with `--sim`), otherwise arming fails with
   "preconditions failed".
+- `configs/sim.yaml` (optional, `--sim` only) is a first-order chamber model
+  in `ChamberSim` (`src/tbctl/hw/ljm_mock.py`). It adds to `sim/set`
+  setpoints, so tests that set values by hand are unaffected.

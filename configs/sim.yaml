@@ -1,0 +1,23 @@
+# Simulator plant model: used only by `tbctl-node --sim`, never on hardware.
+# A simple first-order chamber so demos and operator training show a real
+# start-up and shutdown. Values add to the /api/sim/set setpoints.
+#
+# Lights when both propellant valves are open and the igniter has been on
+# while they are, after ignition_delay_ms. Then Pc rises (rise_ms time
+# constant) to pc_bar. No ignition: an open valve only gives cold_flow_bar.
+# Closing either propellant valve puts the flame out (decay_ms).
+chamber:
+  tag: pressure.chamber
+  ox_valve: valve.ox_main
+  fuel_valve: valve.fuel_main
+  igniter: igniter.main
+  pc_bar: 15.0
+  cold_flow_bar: 1.0
+  ignition_delay_ms: 80
+  rise_ms: 40
+  decay_ms: 60
+  roughness: 0.02          # fractional Pc noise while lit
+  thrust: {tag: force.thrust, n_per_bar: 20.0}
+  manifolds:               # injector feed pressure = Pc x (1 + dp_frac) while open
+    - {tag: pressure.ox_manifold, valve: valve.ox_main, dp_frac: 0.25}
+    - {tag: pressure.fuel_manifold, valve: valve.fuel_main, dp_frac: 0.20}

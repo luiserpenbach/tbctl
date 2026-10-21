@@ -19,9 +19,11 @@ from tbctl.config.models import (
     PidConfig,
     ReviewConfig,
     Sequence,
+    SimConfig,
     cross_validate_pid,
     cross_validate_review,
     cross_validate_sequence,
+    cross_validate_sim,
 )
 
 
@@ -125,6 +127,17 @@ def load_review(path: Path, chmap: ChannelMap | None = None) -> Loaded[ReviewCon
     return Loaded(cfg, sha, path)
 
 
+def load_sim(path: Path, chmap: ChannelMap | None = None) -> Loaded[SimConfig]:
+    data, sha = _read_yaml(path)
+    try:
+        cfg = SimConfig.model_validate(data)
+    except ValidationError as e:
+        raise ConfigError(_format_validation_error(path, e)) from e
+    if chmap is not None and (errors := cross_validate_sim(cfg, chmap)):
+        raise ConfigError("\n".join(f"{path}: {msg}" for msg in errors))
+    return Loaded(cfg, sha, path)
+
+
 @dataclass
 class ConfigBundle:
     channels: Loaded[ChannelMap]
@@ -132,6 +145,7 @@ class ConfigBundle:
     dashboards: dict[str, Loaded[Dashboard]] = field(default_factory=dict)
     pids: dict[str, Loaded[PidConfig]] = field(default_factory=dict)
     review: Loaded[ReviewConfig] | None = None
+    sim: Loaded[SimConfig] | None = None  # simulator plant model, --sim only
 
 
 def load_config_dir(config_dir: Path) -> ConfigBundle:
@@ -144,6 +158,12 @@ def load_config_dir(config_dir: Path) -> ConfigBundle:
     if review_path.is_file():
         try:
             bundle.review = load_review(review_path, channels.model)
+        except ConfigError as e:
+            errors.append(str(e))
+    sim_path = config_dir / "sim.yaml"
+    if sim_path.is_file():
+        try:
+            bundle.sim = load_sim(sim_path, channels.model)
         except ConfigError as e:
             errors.append(str(e))
     for sub, loader, target in (

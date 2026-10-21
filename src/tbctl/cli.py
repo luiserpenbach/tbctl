@@ -43,6 +43,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
             print(f"   WARNING: {name} sets allow_unsafe_end=true")
     for _name, d in bundle.dashboards.items():
         print(f"OK {d.path}  sha256={d.sha256[:16]}…  ({len(d.model.panels)} panels)")
+    if bundle.sim is not None:
+        print(f"OK {bundle.sim.path}  (simulator plant model, --sim only)")
     print("all configs valid")
     return 0
 
