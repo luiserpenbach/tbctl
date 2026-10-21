@@ -39,8 +39,7 @@ function ChannelPicker({
       <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
         <span className="microlabel">Sensors</span>
         <button
-          className="btn"
-          style={{ padding: "0 8px", fontSize: 9.5 }}
+          className="btn sm"
           onClick={() =>
             onChange(
               allSelected
@@ -51,7 +50,7 @@ function ChannelPicker({
         >
           {allSelected ? "Select none" : "Select all"}
         </button>
-        <span style={{ fontSize: 10, color: "var(--text-faint)" }}>
+        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
           {selected.filter((t) => !t.includes("*")).length}/{inputs.length}
         </span>
       </div>

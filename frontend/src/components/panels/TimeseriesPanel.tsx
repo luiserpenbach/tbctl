@@ -8,38 +8,28 @@ import {
   fetchRunEvents,
   type Annotation,
 } from "../../api";
+import { seriesColor, token, useColorScheme } from "../../colors";
 import { buffers, onTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
 
-// categorical series colours in fixed order (dataviz reference dark steps,
-// validated against the panel surface #0a0e13: CVD + normal-vision + 3:1)
-const PALETTE = [
-  "#3987e5",
-  "#d95926",
-  "#199e70",
-  "#c98500",
-  "#d55181",
-  "#008300",
-  "#9085e9",
-  "#e66767",
-];
-// recessive axes: text ink for labels, near-invisible grid
-const AXIS = {
-  stroke: "#95a1b3",
-  font: "10px 'IBM Plex Mono', monospace",
-  grid: { stroke: "rgba(150, 180, 220, 0.06)", width: 1 },
-  ticks: { stroke: "rgba(150, 180, 220, 0.12)" },
-};
+// series colours (fixed categorical order, validated light + dark steps)
+// and axis colours come from theme.css tokens, so charts follow the theme
+const axis = () => ({
+  stroke: token("--plot-axis"),
+  font: "10.5px 'Geist Mono Variable', monospace",
+  grid: { stroke: token("--plot-grid"), width: 1 },
+  ticks: { stroke: token("--line-strong") },
+});
 
 const SYNC_KEY = uPlot.sync("tbctl");
 const DEFAULT_WINDOW_S = 60;
 const runShort = (runId: string) => runId.replace(/^\d{8}-/, "");
 
-const SEV_COLOR: Record<Annotation["severity"], string> = {
-  info: "#8ed4ff",
-  warn: "#ffb547",
-  crit: "#ff4f56",
+const SEV_TOKEN: Record<Annotation["severity"], string> = {
+  info: "--info",
+  warn: "--warn",
+  crit: "--bad",
 };
 
 const WINDOW_CHOICES: [number, string][] = [
@@ -60,17 +50,17 @@ interface Marker {
 function toMarker(e: { event: string; time: number; [k: string]: unknown }): Marker | null {
   switch (e.event) {
     case "note":
-      return { t: e.time, letter: "N", color: "#8ed4ff", label: String(e.text ?? "note") };
+      return { t: e.time, letter: "N", color: token("--info"), label: String(e.text ?? "note") };
     case "seq_fired":
-      return { t: e.time, letter: "F", color: "#3ee08f", label: `FIRE ${e.sequence ?? ""}` };
+      return { t: e.time, letter: "F", color: token("--good"), label: `FIRE ${e.sequence ?? ""}` };
     case "seq_abort_commanded":
-      return { t: e.time, letter: "A", color: "#ff4f56", label: "abort commanded" };
+      return { t: e.time, letter: "A", color: token("--bad"), label: "abort commanded" };
     case "seq_terminal":
       return e.state === "ABORTED" || e.state === "FAULT"
-        ? { t: e.time, letter: "A", color: "#ff4f56", label: `${e.state} ${e.error ?? ""}` }
+        ? { t: e.time, letter: "A", color: token("--bad"), label: `${e.state} ${e.error ?? ""}` }
         : null;
     case "redline_tripped":
-      return { t: e.time, letter: "R", color: "#ffb547", label: String(e.reason ?? "redline") };
+      return { t: e.time, letter: "R", color: token("--warn"), label: String(e.reason ?? "redline") };
     default:
       return null;
   }
@@ -89,6 +79,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
   const overlayRuns = useStore((s) => s.overlayRuns);
   const toggleOverlayRun = useStore((s) => s.toggleOverlayRun);
   const tags = panel.channels;
+  const scheme = useColorScheme(); // rebuild the plot when the OS theme flips
   const isHistory = viewMode.mode === "run";
   const markersRef = useRef<Marker[]>([]);
   const [windowS, setWindowS] = useState(panel.window_s ?? DEFAULT_WINDOW_S);
@@ -135,7 +126,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         ? runsToPlot.flatMap((run, ri) =>
             tags.map((tag, i) => ({
               label: ri === 0 ? tag : `${tag} · ${runShort(run.run_id)}`,
-              stroke: PALETTE[i % PALETTE.length],
+              stroke: seriesColor(i),
               width: ri === 0 ? 2 : 1.25,
               dash: ri === 0 ? undefined : ([6, 4] as number[]),
               alpha: ri === 0 ? 1 : 0.75,
@@ -144,7 +135,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
           )
         : tags.map((tag, i) => ({
             label: tag,
-            stroke: PALETTE[i % PALETTE.length],
+            stroke: seriesColor(i),
             width: 2,
             points: { show: false },
           }));
@@ -167,14 +158,14 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
         },
       },
       axes: [
-        { ...AXIS },
+        axis(),
         {
-          ...AXIS,
+          ...axis(),
           size: 52,
           ...(panel.y_axis.label
             ? {
                 label: panel.y_axis.label,
-                labelFont: "10px 'IBM Plex Mono', monospace",
+                labelFont: "10.5px 'Geist Mono Variable', monospace",
                 labelGap: 4,
                 labelSize: 14,
               }
@@ -206,7 +197,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             const bottom = u.bbox.top + u.bbox.height;
             if (annRef.current.length) {
               ctx.save();
-              ctx.font = `${9 * devicePixelRatio}px monospace`;
+              ctx.font = `${9.5 * devicePixelRatio}px "Geist Mono Variable", monospace`;
               ctx.textAlign = "left";
               for (const a of annRef.current) {
                 const shift = relativeRef.current ? primT0Ref.current : 0;
@@ -215,7 +206,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
                 const left = Math.max(x0, u.bbox.left);
                 const right = Math.min(x1, u.bbox.left + u.bbox.width);
                 if (right < u.bbox.left || left > u.bbox.left + u.bbox.width) continue;
-                const color = SEV_COLOR[a.severity];
+                const color = token(SEV_TOKEN[a.severity]);
                 const faded = a.status === "resolved";
                 ctx.fillStyle = color + (faded ? "14" : "26");
                 ctx.fillRect(left, top, Math.max(right - left, 2), bottom - top);
@@ -234,7 +225,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             // event markers over the plot area (run review, phase 15)
             if (!markersRef.current.length) return;
             ctx.save();
-            ctx.font = `${10 * devicePixelRatio}px monospace`;
+            ctx.font = `${10.5 * devicePixelRatio}px "Geist Mono Variable", monospace`;
             ctx.textAlign = "center";
             for (const m of markersRef.current) {
               const x = u.valToPos(m.t, "x", true);
@@ -365,6 +356,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
     viewMode.mode === "run" ? viewMode.run.run_id : "",
     overlayRuns.map((o) => o.run_id).join("|"),
     annVersion,
+    scheme,
   ]);
 
   const saveAnnotation = () => {
@@ -423,7 +415,7 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
             onClick={() => toggleTag(tag)}
             title={unitOf(tag)}
           >
-            <span className="swatch" style={{ background: PALETTE[i % PALETTE.length] }} />
+            <span className="swatch" style={{ background: seriesColor(i) }} />
             {tag}
             {unitOf(tag) && <span className="legend-unit">({unitOf(tag)})</span>}
           </span>

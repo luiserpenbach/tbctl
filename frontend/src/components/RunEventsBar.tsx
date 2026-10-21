@@ -43,7 +43,7 @@ export function RunEventsBar() {
 
   return (
     <div className="report-bar" style={{ marginTop: -4 }}>
-      <button className="btn" style={{ padding: "0 8px", fontSize: 9.5 }} onClick={() => setOpen(!open)}>
+      <button className="btn sm" onClick={() => setOpen(!open)}>
         {open ? "▾" : "▸"} Events ({events.length})
       </button>
       {(open ? events : events.filter((e) => e.event in COLOR)).map((e, i) => (

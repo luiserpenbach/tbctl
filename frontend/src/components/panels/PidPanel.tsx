@@ -98,7 +98,7 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
         </PidStage>
       </div>
       {!canActuate && (
-        <div style={{ fontSize: 10, color: "var(--text-faint)", padding: "2px 8px" }}>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "2px 8px" }}>
           view-only: {status.control_enabled ? `sequencer ${seqState}` : "control mode disabled"}
         </div>
       )}

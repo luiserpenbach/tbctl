@@ -60,7 +60,7 @@ function StepsTable({
   return (
     <table className="value-table seq-steps">
       <thead>
-        <tr style={{ color: "var(--text-faint)", fontSize: 10, textTransform: "uppercase" }}>
+        <tr style={{ color: "var(--text-faint)", fontSize: 11.5, textTransform: "uppercase" }}>
           <td>#</td>
           <td>t [s]</td>
           {outputs.map((o) => (
@@ -153,7 +153,7 @@ function BoundsTable({
   return (
     <table className="value-table">
       <thead>
-        <tr style={{ color: "var(--text-faint)", fontSize: 10, textTransform: "uppercase" }}>
+        <tr style={{ color: "var(--text-faint)", fontSize: 11.5, textTransform: "uppercase" }}>
           <td>channel</td>
           <td>min</td>
           <td>max</td>
@@ -420,7 +420,7 @@ export function SequencesEditor() {
   return (
     <div className="editor-page seq-editor">
       <div className="editor-head">
-        <span className="modal-title">sequences</span>
+        <span className="modal-title">Sequences</span>
         {list.map((s) => (
           <button
             key={s.name}

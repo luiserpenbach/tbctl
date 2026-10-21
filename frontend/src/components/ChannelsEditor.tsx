@@ -76,7 +76,7 @@ function CalPreview({ cal, range, raw }: { cal: Cal | undefined; range: number; 
           <circle cx={sx(raw)} cy={sy(evalCal(cal, raw))} r="3.5" fill="var(--amber)" />
         )}
       </svg>
-      <div style={{ fontSize: 10, color: "var(--text-faint)" }}>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
         0…{range} V → {yMin.toFixed(1)}…{yMax.toFixed(1)} EU
         {raw !== null && (
           <span style={{ color: "var(--amber)" }}>
@@ -123,7 +123,7 @@ function ChannelForm({
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">{chan.tag ? `edit ${chan.tag}` : "new channel"}</div>
+        <div className="modal-title">{chan.tag ? `Edit ${chan.tag}` : "New channel"}</div>
         <div className="modal-row">
           <span style={{ width: 70 }}>tag</span>
           {inp(c.tag, (s) => upd({ tag: s }), 180)}
@@ -173,7 +173,7 @@ function ChannelForm({
               <span style={{ width: 70 }}>expr</span>
               {inp(c.expr, (s) => upd({ expr: s }), 300)}
             </div>
-            <div style={{ fontSize: 10, color: "var(--text-faint)" }}>
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
               arithmetic over physical channel tags, e.g.{" "}
               <code>pressure.ox_manifold - pressure.chamber</code> · functions: abs sqrt log
               log10 exp min max
@@ -350,12 +350,12 @@ export function ChannelsEditor() {
   return (
     <div className="editor-page">
       <div className="editor-head">
-        <span className="modal-title">channels & calibration</span>
+        <span className="modal-title">Channels &amp; calibration</span>
         <button className="btn" onClick={() => setEditing({ tag: "", hw: "", kind: "analog_in", unit: "bar", range: 10, cal: { kind: "linear", gain: 1, offset: 0 }, rate_group: "default" })}>
-          + add channel
+          + Add channel
         </button>
         <button className="btn active" disabled={!dirty} onClick={save}>
-          save & apply
+          Save &amp; apply
         </button>
         {dirty && <span className="chip warn"><span className="dot" />unsaved changes</span>}
       </div>
@@ -374,7 +374,7 @@ export function ChannelsEditor() {
       </div>
       <table className="value-table">
         <thead>
-          <tr style={{ color: "var(--text-faint)", fontSize: 10, textTransform: "uppercase" }}>
+          <tr style={{ color: "var(--text-faint)", fontSize: 11.5, textTransform: "uppercase" }}>
             <td>tag</td><td>pin</td><td>kind</td><td>unit</td><td>cal</td><td>live</td><td></td>
           </tr>
         </thead>

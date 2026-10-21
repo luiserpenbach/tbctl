@@ -40,7 +40,7 @@ export function RawTablePanel() {
     <div style={{ overflowY: "auto", height: "100%", display: "flex", flexDirection: "column" }}>
       <table className="value-table">
         <thead>
-          <tr style={{ color: "var(--text-faint)", fontSize: 10, textTransform: "uppercase" }}>
+          <tr style={{ color: "var(--text-faint)", fontSize: 11.5, textTransform: "uppercase" }}>
             <td>tag</td>
             <td>pin</td>
             <td style={{ textAlign: "right" }}>raw</td>
