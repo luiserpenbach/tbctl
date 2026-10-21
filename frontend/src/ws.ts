@@ -1,10 +1,26 @@
 import { decode } from "@msgpack/msgpack";
+import { fetchStatus } from "./api";
 import { buffers } from "./databuf";
 import { useStore } from "./store";
 import type { WsMsg } from "./types";
 
 let retryMs = 500;
 let started = false;
+let statusTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Every event (control mode, recording, sequencer, valves, checklist,
+// connection...) can change /api/status: refetch it right away rather than
+// waiting for the 2 s poll, so all clients agree within a round trip.
+// Debounced so a burst of events costs one request.
+function refreshStatusSoon() {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    fetchStatus()
+      .then((st) => useStore.getState().setStatus(st))
+      .catch(() => {});
+  }, 50);
+}
 
 export function connectWs() {
   if (started) return; // React StrictMode double-mounts; connect once
@@ -31,6 +47,7 @@ function openSocket() {
       useStore.getState().setSeqStatus(msg);
     } else if (msg.type === "event") {
       useStore.getState().pushEvent(msg);
+      refreshStatusSoon();
     }
   };
 

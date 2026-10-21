@@ -32,6 +32,7 @@ from tbctl.services.thermocouple import compensated_temp_degc
 log = logging.getLogger(__name__)
 
 CJC_POLL_S = 1.0  # cold-junction temperature refresh interval
+STREAM_READS_HZ = 40  # stream block rate (scans_per_read = scan rate / this)
 # Streamed DIO image covering DIO 0-15, i.e. every possible sequencer output
 # (FIO0-7 + EIO0-7). Read-only and does not change line direction.
 DIO_SCAN_NAME = "FIO_EIO_STATE"
@@ -63,26 +64,35 @@ class RingBuffer:
         self._write = int((self._write + n) % self.capacity)
         self._count = min(self._count + n, self.capacity)
 
-    def _ordered(self) -> tuple[np.ndarray, np.ndarray]:
+    def _segments(self) -> list[tuple[int, int]]:
+        """Physical [start, stop) slices of the ring in time order. Reads index
+        these directly instead of copying the whole ring into order."""
         if self._count < self.capacity:
-            return self._t[: self._count], self._v[: self._count]
-        idx = (self._write + np.arange(self.capacity)) % self.capacity
-        return self._t[idx], self._v[idx]
+            return [(0, self._count)]
+        return [(self._write, self.capacity), (0, self._write)]
 
     def window(self, t0: float, t1: float | None = None) -> tuple[np.ndarray, np.ndarray]:
-        """Samples with t0 < t <= t1 (copies), oldest first."""
-        t, v = self._ordered()
-        if len(t) == 0:
-            return t, v
-        lo = np.searchsorted(t, t0, side="right")
-        hi = len(t) if t1 is None else int(np.searchsorted(t, t1, side="right"))
-        return t[lo:hi].copy(), v[lo:hi].copy()
+        """Samples with t0 < t <= t1 (copies), oldest first. Cost is in the
+        samples returned, not the ring size."""
+        ts, vs = [], []
+        for start, stop in self._segments():
+            seg = self._t[start:stop]
+            lo = int(np.searchsorted(seg, t0, side="right"))
+            hi = len(seg) if t1 is None else int(np.searchsorted(seg, t1, side="right"))
+            if hi > lo:
+                ts.append(self._t[start + lo : start + hi])
+                vs.append(self._v[start + lo : start + hi])
+        if not ts:
+            return np.empty(0), np.empty((0, len(self.tags)))
+        if len(ts) == 1:
+            return ts[0].copy(), vs[0].copy()
+        return np.concatenate(ts), np.concatenate(vs)
 
     def latest(self) -> dict[str, float]:
-        t, v = self._ordered()
-        if len(t) == 0:
+        if self._count == 0:
             return {}
-        return {tag: float(v[-1, i]) for tag, i in self._col.items()}
+        row = self._v[(self._write - 1) % self.capacity]
+        return {tag: float(row[i]) for tag, i in self._col.items()}
 
     def columns(self, tags: list[str]) -> list[int]:
         return [self._col[t] for t in tags]
@@ -244,7 +254,8 @@ class AcquisitionService:
         if settings := self._chmap.ain_settings():
             names, values = zip(*settings, strict=True)
             await asyncio.to_thread(self._iface.write_names, list(names), list(values))
-        scans_per_read = max(1, int(self.scan_rate_hz / 10))  # ~10 Hz loop
+        # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
+        scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
         actual = await asyncio.to_thread(
             self._iface.stream_start, self._scan_names, self.scan_rate_hz, scans_per_read
         )

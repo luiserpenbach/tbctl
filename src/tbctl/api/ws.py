@@ -25,7 +25,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-EMIT_INTERVAL_S = 0.1  # 10 Hz
+EMIT_INTERVAL_S = 0.04  # live frames at 25 Hz
+STATUS_INTERVAL_S = 0.1  # sequencer status (register reads on the T7) at 10 Hz
 
 
 class WsClient:
@@ -88,20 +89,24 @@ class WsHub:
         }
 
     async def _emit_loop(self) -> None:
+        last_status = 0.0
         while True:
             await asyncio.sleep(EMIT_INTERVAL_S)
-            try:
-                # stop the heartbeat when the sequencer reaches a terminal state
-                await self._ctx.sequencer.watch_terminal()
-            except Exception:
-                log.exception("sequencer terminal watch failed")
+            seq_status = None
+            if time.monotonic() - last_status >= STATUS_INTERVAL_S:
+                last_status = time.monotonic()
+                try:
+                    # stop the heartbeat when the sequencer reaches a terminal state
+                    await self._ctx.sequencer.watch_terminal()
+                except Exception:
+                    log.exception("sequencer terminal watch failed")
+                if self._clients:
+                    try:
+                        seq_status = self._seq_status()
+                    except Exception:
+                        log.exception("seq status read failed")
             if not self._clients:
                 continue
-            try:
-                seq_status = self._seq_status()
-            except Exception:
-                log.exception("seq status read failed")
-                seq_status = None
             for c in list(self._clients):
                 try:
                     frames = self._ctx.acq.frames_since(

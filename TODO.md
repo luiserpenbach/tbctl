@@ -100,6 +100,11 @@ Hopper T7, with a logic analyser on the outputs:
       0/1 edges against the logic analyser (expect within one scan period).
       If it fails, set `record_outputs: false` and open an issue. Analysis
       then loses ignition-delay timing.
+- [ ] **Also new:** the node now reads the stream in ~25 ms blocks (40 reads/s,
+      was 100 ms) and sends display frames at 25 Hz (was 10 Hz), for lower
+      display latency. During the soak, with the UI open on the Pi, check
+      for `stream backlog` warnings in the node log and skipped scans. If there are, raise the block size via `STREAM_READS_HZ` in
+      `services/acquisition.py`.
 - [ ] Fill in the sign-off table.
 
 ## 4. Sensor and actuator checkout

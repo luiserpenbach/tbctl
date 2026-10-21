@@ -327,13 +327,22 @@ export function TimeseriesPanel({ panel }: { panel: PanelConfig }) {
       setSelRange(null);
       setAnnForm(null);
       off = onTick(() => {
-        const data = buffers.aligned(tags);
+        const latest = buffers.latestTime();
+        const following = followRef.current && latest !== null;
+        // following live: only the visible window, thinned to ~2 points per
+        // pixel column; zoomed / paused: the whole buffer, as before
+        const data = following
+          ? buffers.aligned(tags, { since: latest - windowRef.current, maxPoints: plot.bbox.width / devicePixelRatio })
+          : buffers.aligned(tags);
         // apply series visibility
         tags.forEach((tag, i) => plot.setSeries(i + 1, { show: !hiddenRef.current.has(tag) }));
         plot.setData(data, false);
-        const latest = buffers.latestTime();
-        if (followRef.current && latest !== null) {
+        // always re-apply x: setData(…, false) keeps the previous index window,
+        // which is wrong once the arrays change shape (thinned ↔ full)
+        if (following) {
           plot.setScale("x", { min: latest - windowRef.current, max: latest });
+        } else if (plot.scales.x.min != null && plot.scales.x.max != null) {
+          plot.setScale("x", { min: plot.scales.x.min, max: plot.scales.x.max });
         }
       });
     }

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchRuns, runCsvUrl, runHopperCsvUrl, runHopperMapUrl } from "../api";
-import { buffers, onTick } from "../databuf";
 import { useStore } from "../store";
 import { isReadable, OUTCOME_LABEL, type Outcome } from "../types";
 import { EventFeed } from "./EventFeed";
+import { LiveValue } from "./LiveValue";
 
 const OUTCOME_COLOR: Record<Outcome, string> = {
   pass: "var(--green)",
@@ -24,9 +24,6 @@ export function Sidebar() {
   const [query, setQuery] = useState("");
   const [runQuery, setRunQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [, setTick] = useState(0);
-
-  useEffect(() => onTick(() => setTick((t) => t + 1)), []);
   useEffect(() => {
     fetchRuns()
       .then((r) => setRuns(r.runs))
@@ -177,10 +174,9 @@ export function Sidebar() {
             {!collapsed.has(ns) &&
               chans.map((c) => {
                 const isOutput = c.kind === "valve" || c.kind === "igniter";
-                const val = isOutput
-                  ? (status?.outputs[c.tag] ?? "—")
-                  : fmt(buffers.latest(c.tag));
-                const lit = val === "open" || val === "on";
+                // outputs come from status; inputs update in place (LiveValue)
+                const out = isOutput ? (status?.outputs[c.tag] ?? "—") : "";
+                const lit = out === "open" || out === "on";
                 return (
                   <div
                     key={c.tag}
@@ -189,7 +185,7 @@ export function Sidebar() {
                   >
                     <span>{c.tag.slice(ns.length + 1)}</span>
                     <span className={`val ${isOutput ? (lit ? "on" : "off") : ""}`}>
-                      {val}
+                      {isOutput ? out : <LiveValue tag={c.tag} format={fmt} />}
                       {!isOutput && c.unit && <span className="unit">{c.unit}</span>}
                     </span>
                   </div>

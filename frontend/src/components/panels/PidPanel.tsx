@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPid, setManualValve, type PidConfigT, type PidElement } from "../../api";
-import { buffers, onTick } from "../../databuf";
+import { buffers, onSlowTick } from "../../databuf";
 import { useStore } from "../../store";
 import type { PanelConfig } from "../../types";
 import { PidStage } from "../pid/PidStage";
@@ -19,7 +19,8 @@ export function PidPanel({ panel }: { panel: PanelConfig }) {
   const [pending, setPending] = useState<{ id: string; tag: string; action: string } | null>(null);
   const [, setTick] = useState(0);
 
-  useEffect(() => onTick(() => setTick((t) => t + 1)), []);
+  // labels are text: 10 Hz is enough (charts use the per-frame tick)
+  useEffect(() => onSlowTick(() => setTick((t) => t + 1)), []);
   useEffect(() => {
     setCfg(null);
     setErr("");
