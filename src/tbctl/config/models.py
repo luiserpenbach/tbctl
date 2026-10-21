@@ -33,6 +33,36 @@ _AIN_RE = re.compile(r"^AIN([0-9]+)$")
 
 MAX_OUTPUT_BITS = 16
 
+# T7 analog input settings, written to the device before every stream start.
+# AIN#_RANGE takes one of these (+-V). AIN#_NEGATIVE_CH is 199 for
+# single-ended (vs GND) or the negative AIN of a differential pair: on the
+# base inputs the pair is an even AIN and the next odd one (AIN0/AIN1 ...
+# AIN12/AIN13); on Mux80 extended inputs (AIN16-127) it is n and n+8 with n
+# in the lower half of its 16-channel block (AIN48/AIN56 ... AIN55/AIN63).
+AIN_RANGES = (10.0, 1.0, 0.1, 0.01)
+SINGLE_ENDED = 199
+
+
+def ain_number(hw: str) -> int:
+    m = _AIN_RE.match(hw)
+    if not m:
+        raise ValueError(f"{hw!r} is not an AIN name")
+    return int(m.group(1))
+
+
+def differential_error(pos_hw: str, neg_hw: str) -> str | None:
+    """Why (pos, neg) is not a valid T7 differential pair, or None."""
+    p, n = ain_number(pos_hw), ain_number(neg_hw)
+    if p <= 13:
+        if p % 2 == 0 and n == p + 1:
+            return None
+        return f"{pos_hw}: base differential pairs are even/odd neighbours (AIN{p - p % 2}/AIN{p - p % 2 + 1})"
+    if p >= 16:
+        if (p // 8) % 2 == 0 and n == p + 8:
+            return None
+        return f"{pos_hw}: extended differential pairs are AINn/AIN(n+8), n in the lower half of its 16-block"
+    return f"{pos_hw}: AIN14/AIN15 cannot be differential"
+
 
 def dio_number(hw: str) -> int:
     """Global DIO number for a DIO name like FIO3 / EIO5 (FIO0=0 ... MIO2=22)."""
@@ -113,6 +143,21 @@ class TableCal(StrictModel):
 Cal = Annotated[PolynomialCal | LinearCal | TableCal, Field(discriminator="kind")]
 
 
+def _check_range(v: float) -> float:
+    if v not in AIN_RANGES:
+        raise ValueError(f"range must be one of {AIN_RANGES} (T7 +-V), got {v}")
+    return v
+
+
+def _check_differential(ch):
+    if ch.negative_ch is not None:
+        if not _AIN_RE.match(ch.negative_ch):
+            raise ValueError(f"{ch.tag}: negative_ch must be an AIN name, got {ch.negative_ch!r}")
+        if err := differential_error(ch.hw, ch.negative_ch):
+            raise ValueError(f"{ch.tag}: {err}")
+    return ch
+
+
 class AnalogInChannel(StrictModel):
     tag: str
     # display / P&ID name (e.g. PT-CC-01); becomes the channel name in
@@ -121,7 +166,9 @@ class AnalogInChannel(StrictModel):
     hw: str
     kind: Literal["analog_in"]
     unit: str
-    range: float = Field(default=10.0, description="LJM AIN range setting in volts")
+    range: float = Field(default=10.0, description="T7 AIN range, +-V (10, 1, 0.1, 0.01)")
+    # negative input of a differential pair (e.g. AIN7 for AIN6); None = single-ended
+    negative_ch: str | None = None
     cal: Cal = PolynomialCal(kind="polynomial", coeffs=[0.0, 1.0])
     rate_group: str = "default"
 
@@ -133,6 +180,15 @@ class AnalogInChannel(StrictModel):
             raise ValueError(f"analog_in hw must be AIN0..AIN127, got {v!r}")
         return v
 
+    @field_validator("range")
+    @classmethod
+    def _range(cls, v: float) -> float:
+        return _check_range(v)
+
+    @model_validator(mode="after")
+    def _differential(self) -> AnalogInChannel:
+        return _check_differential(self)
+
 
 class ThermocoupleChannel(StrictModel):
     tag: str
@@ -142,6 +198,9 @@ class ThermocoupleChannel(StrictModel):
     hw: str
     kind: Literal["thermocouple_k"]
     unit: Literal["degC", "K", "degF"] = "degC"
+    # type K is ~41 uV/degC (~55 mV at 1372 degC): +-0.1 V keeps the resolution
+    range: float = 0.1
+    negative_ch: str | None = None  # thermocouples are usually wired differential
     rate_group: str = "default"
 
     @field_validator("hw")
@@ -150,6 +209,15 @@ class ThermocoupleChannel(StrictModel):
         if not _AIN_RE.match(v):
             raise ValueError(f"thermocouple hw must be an AIN, got {v!r}")
         return v
+
+    @field_validator("range")
+    @classmethod
+    def _range(cls, v: float) -> float:
+        return _check_range(v)
+
+    @model_validator(mode="after")
+    def _differential(self) -> ThermocoupleChannel:
+        return _check_differential(self)
 
 
 class ValveChannel(StrictModel):
@@ -244,6 +312,12 @@ class ChannelMap(StrictModel):
         hws = [c.hw for c in self.channels if not isinstance(c, DerivedChannel)]
         if dupes := {h for h in hws if hws.count(h) > 1}:
             raise ValueError(f"duplicate hw assignments: {sorted(dupes)}")
+        for c in self.inputs():
+            if c.negative_ch is not None and c.negative_ch in hws:
+                raise ValueError(
+                    f"{c.tag}: {c.negative_ch} is its differential negative input, "
+                    "so no channel can use it"
+                )
         if "default" not in self.rate_groups:
             raise ValueError("rate_groups must define 'default'")
         for c in self.channels:
@@ -282,6 +356,15 @@ class ChannelMap(StrictModel):
     def inputs(self) -> list[InputChannel]:
         """Physical (hardware-scanned) input channels."""
         return [c for c in self.channels if isinstance(c, InputChannel)]
+
+    def ain_settings(self) -> list[tuple[str, float]]:
+        """(register, value) pairs configuring every scanned AIN: range and
+        negative channel. Written before each stream start."""
+        out: list[tuple[str, float]] = []
+        for c in self.inputs():
+            neg = ain_number(c.negative_ch) if c.negative_ch else SINGLE_ENDED
+            out += [(f"{c.hw}_RANGE", c.range), (f"{c.hw}_NEGATIVE_CH", float(neg))]
+        return out
 
     def derived(self) -> list[DerivedChannel]:
         return [c for c in self.channels if isinstance(c, DerivedChannel)]

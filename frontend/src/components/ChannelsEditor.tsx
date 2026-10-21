@@ -17,6 +17,7 @@ interface Chan {
   kind: "analog_in" | "thermocouple_k" | "valve" | "igniter" | "derived";
   unit?: string;
   range?: number;
+  negative_ch?: string | null;
   cal?: Cal;
   rate_group?: string;
   fail_safe?: string;
@@ -185,12 +186,31 @@ function ChannelForm({
             {inp(c.unit, (s) => upd({ unit: s }), 70)}
             <span>rate group</span>
             {inp(c.rate_group, (s) => upd({ rate_group: s }), 80)}
-            {isAnalog && (
-              <>
-                <span>range V</span>
-                {inp(c.range, (s) => upd({ range: parseFloat(s) || 0 }), 60)}
-              </>
-            )}
+          </div>
+        )}
+        {(isAnalog || c.kind === "thermocouple_k") && (
+          <div
+            className="modal-row"
+            title="written to the T7 before every stream start; neg = negative input of a differential pair (AIN0/AIN1 …, Mux80 AIN48/AIN56 …), empty = single-ended"
+          >
+            <span style={{ width: 70 }}>range</span>
+            <select
+              className="seq-select"
+              style={{ flex: "none", minWidth: 0, width: 90 }}
+              value={c.range ?? (isAnalog ? 10 : 0.1)}
+              onChange={(e) => upd({ range: parseFloat(e.target.value) })}
+            >
+              {[10, 1, 0.1, 0.01].map((r) => (
+                <option key={r} value={r}>
+                  ±{r} V
+                </option>
+              ))}
+            </select>
+            <span>neg</span>
+            {inp(c.negative_ch ?? "", (s) => upd({ negative_ch: s.trim() ? s.trim().toUpperCase() : null }), 80)}
+            <span style={{ textTransform: "none", letterSpacing: 0 }}>
+              {c.negative_ch ? "differential" : "single-ended"}
+            </span>
           </div>
         )}
         {isAnalog && c.cal && (

@@ -6,6 +6,10 @@
 #   tag   stable ID, `quantity.location`; becomes the hopper "DAQ ID"
 #   name  P&ID / display name (PT-CC-01, ...); becomes the hopper channel name
 #   unit  pressures in bar, temperatures degC (exported as °C), flows in g/s
+#
+# Every input's `range` (+-10/1/0.1/0.01 V) and `negative_ch` (differential
+# pair; omit for single-ended) are written to the T7 before each stream
+# start. Thermocouples default to +-0.1 V.
 device:
   ip: 192.168.10.20
   connection: ethernet   # "usb" for laptop bench testing (ip then ignored)
@@ -71,12 +75,14 @@ channels:
   - tag: temp.injector
     name: TC-INJ-01
     hw: AIN48          # Mux80 extended channel
+    negative_ch: AIN56   # differential pair
     kind: thermocouple_k
     unit: degC
     rate_group: default
   - tag: temp.chamber_wall
     name: TC-CC-01
     hw: AIN49
+    negative_ch: AIN57   # differential pair
     kind: thermocouple_k
     unit: degC
     rate_group: default
@@ -85,6 +91,7 @@ channels:
   - tag: force.thrust
     name: LC-01
     hw: AIN6
+    negative_ch: AIN7   # differential pair
     kind: analog_in
     unit: N
     range: 0.1

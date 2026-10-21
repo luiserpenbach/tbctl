@@ -58,7 +58,7 @@ async def test_edit_cal_and_hot_apply(client):
 async def test_add_and_remove_channel(client):
     cfg = (await client.get("/api/config/channels")).json()["config"]
     cfg["channels"].append(
-        {"tag": "pressure.new_pt", "hw": "AIN7", "kind": "analog_in", "unit": "bar"}
+        {"tag": "pressure.new_pt", "hw": "AIN8", "kind": "analog_in", "unit": "bar"}
     )
     assert (await client.post("/api/config/channels", json=cfg)).status_code == 200
     tags = [c["tag"] for c in (await client.get("/api/channels")).json()["channels"]]

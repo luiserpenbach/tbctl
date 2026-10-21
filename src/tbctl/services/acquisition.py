@@ -239,6 +239,11 @@ class AcquisitionService:
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
+        # per-channel range + single-ended/differential, before the stream
+        # starts (stream mode honours both); the T7 defaults are +-10 V vs GND
+        if settings := self._chmap.ain_settings():
+            names, values = zip(*settings, strict=True)
+            await asyncio.to_thread(self._iface.write_names, list(names), list(values))
         scans_per_read = max(1, int(self.scan_rate_hz / 10))  # ~10 Hz loop
         actual = await asyncio.to_thread(
             self._iface.stream_start, self._scan_names, self.scan_rate_hz, scans_per_read

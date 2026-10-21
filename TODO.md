@@ -50,13 +50,11 @@ and tests running. None of them describes Hopper hardware.
 - [ ] `review.yaml` rules, `checklists/pre_fire.yaml` (Hopper/Aldenhoven test
       procedure, H2 items), `dashboards/`, and a P&ID with the real feed-system
       SVG (`pid/`).
-- [ ] **Software gap (fix before using thermocouples or load cells):** the
-      T7 is never told the AIN `range` from `channels.yaml` (no `AIN#_RANGE`
-      write), and there is no differential setting (`AIN#_NEGATIVE_CH`). So
-      every input streams single-ended at ±10 V. Thermocouples (mV signals)
-      and bridge load cells need ±0.1 V and differential wiring to have
-      usable resolution. Add a `negative_ch` field, write range and
-      negative channel before `eStreamStart`, then verify on the T7.
+- [ ] Set every input's `range` (±10 / 1 / 0.1 / 0.01 V) and, for
+      differential wiring, `negative_ch`. Load cells and thermocouples need
+      ±0.1 V and differential to have usable resolution. Thermocouples
+      default to ±0.1 V single-ended. Both settings are written to the T7
+      before each stream start.
 - [ ] `uv run tbctl validate --config-dir <dir>` passes, and every sequence's
       compile report has been reviewed (the sequence editor shows it).
 - [ ] Dry-run the real config in the simulator (`tbctl-node --sim
@@ -106,6 +104,11 @@ Hopper T7, with a logic analyser on the outputs:
 
 ## 4. Sensor and actuator checkout
 
+- [ ] Range and differential settings took effect: after the node starts,
+      read `AIN#_RANGE` / `AIN#_NEGATIVE_CH` back with Kipling. Check that a
+      differential pair reads the bridge or thermocouple signal, not
+      half-scale noise. The Mux80 pairing rule (AINn/AIN(n+8)) comes from
+      the LabJack docs, so confirm it on the real board.
 - [ ] Every input: zero and span against a reference, calibration
       coefficients, sign, plausible noise; thermocouples against a reference
       (cold-junction compensation uses the T7 temperature); Mux80 channels.
