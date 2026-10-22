@@ -198,3 +198,28 @@ async def test_restart_hook_logs_event_and_checks_lua(node):
     ctx.iface.backend._regs[REG_NAME["INTERP_VERSION"]] = 0.0
     await hook(200.0, 201.0)
     assert ctx.events.tail(1)[0]["event"] == "lua_not_running"
+
+
+async def test_streaming_alone_keeps_the_watchdog_fed(chmap, monkeypatch):
+    """With no dashboard connected, the stream is the only activity; the T7
+    watchdog ignores stream data, so acquisition must send a command at
+    least every WATCHDOG_FEED_S (bench: stream stalled every ~9 s without)."""
+    monkeypatch.setattr(acquisition, "WATCHDOG_FEED_S", 0.1)
+
+    class Counting(MockDevice):
+        commands = 0
+
+        def read_name(self, name):
+            Counting.commands += 1
+            return super().read_name(name)
+
+    dev = Counting(chmap)
+    dev.open()
+    acq = AcquisitionService(chmap, dev)
+    await acq.start()
+    try:
+        before = Counting.commands
+        await asyncio.sleep(0.55)
+        assert Counting.commands - before >= 4
+    finally:
+        await acq.stop()

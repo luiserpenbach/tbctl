@@ -38,6 +38,11 @@ log = logging.getLogger(__name__)
 STREAM_READS_HZ = 40  # stream block rate (scans_per_read = scan rate / this)
 STREAM_POLL_S = 0.005  # wait between reads that returned no scans yet
 RESTART_MAX_DELAY_S = 5.0  # back-off cap between stream restart attempts
+# The T7 hardware watchdog only counts host commands, not stream data. With no
+# dashboard connected nothing else talks to the device, the watchdog fires
+# after watchdog_timeout_s and the stream stalls (bench: every ~9 s).
+WATCHDOG_FEED_S = 1.0
+WATCHDOG_FEED_REG = "DIO_STATE"  # any cheap read that works while streaming
 # Streamed DIO image covering DIO 0-15, i.e. every possible sequencer output
 # (FIO0-7 + EIO0-7). Read-only and does not change line direction.
 DIO_SCAN_NAME = "FIO_EIO_STATE"
@@ -171,6 +176,7 @@ class AcquisitionService:
         # False from a failed stream read until the stream is restarted
         self.stream_ok = True
         self.stream_error: str | None = None
+        self._fed_at = 0.0  # monotonic time of the last watchdog feed
         self._configure(chmap, capacity_s)
 
     def _configure(self, chmap: ChannelMap, capacity_s: float) -> None:
@@ -306,6 +312,7 @@ class AcquisitionService:
 
     async def _run(self) -> None:
         while True:
+            await self._feed_watchdog()
             try:
                 block, backlog = await asyncio.to_thread(self._iface.stream_read)
             except asyncio.CancelledError:
@@ -319,6 +326,16 @@ class AcquisitionService:
             if backlog > self.scan_rate_hz:  # >1 s behind
                 log.warning("stream backlog %d scans", backlog)
             self._ingest(block)
+
+    async def _feed_watchdog(self) -> None:
+        """One command per WATCHDOG_FEED_S while this loop runs: the watchdog
+        then fires only when the node (or its acquisition) is dead."""
+        now = time.monotonic()
+        if now - self._fed_at < WATCHDOG_FEED_S:
+            return
+        self._fed_at = now
+        with contextlib.suppress(Exception):  # a dead link shows up in stream_read
+            await asyncio.to_thread(self._iface.read_name, WATCHDOG_FEED_REG)
 
     async def _restart_stream(self, err: Exception) -> None:
         """A stopped stream does not come back by itself: restart it, backing
