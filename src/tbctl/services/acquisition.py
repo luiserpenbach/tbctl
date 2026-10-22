@@ -255,9 +255,9 @@ class AcquisitionService:
             names, values = zip(*settings, strict=True)
             await asyncio.to_thread(self._iface.write_names, list(names), list(values))
         # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
-        scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
+        self._scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
         actual = await asyncio.to_thread(
-            self._iface.stream_start, self._scan_names, self.scan_rate_hz, scans_per_read
+            self._iface.stream_start, self._scan_names, self.scan_rate_hz, self._scans_per_read
         )
         if abs(actual - self.scan_rate_hz) / self.scan_rate_hz > 0.01:
             log.warning("device stream rate %.1f != requested %.1f", actual, self.scan_rate_hz)
@@ -285,8 +285,19 @@ class AcquisitionService:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("stream read failed; retrying in 1 s")
+                log.exception("stream read failed; restarting stream in 1 s")
                 await asyncio.sleep(1.0)
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(self._iface.stream_stop)
+                try:
+                    await asyncio.to_thread(
+                        self._iface.stream_start,
+                        self._scan_names,
+                        self.scan_rate_hz,
+                        self._scans_per_read,
+                    )
+                except Exception:
+                    log.exception("stream restart failed")
                 continue
             if backlog > self.scan_rate_hz:  # >1 s behind
                 log.warning("stream backlog %d scans", backlog)
