@@ -29,8 +29,15 @@ async def test_connection_info(client):
     assert info["stream"]["running"] is True
 
 
-async def test_switch_to_usb_fails_and_restores_sim(client):
-    """No LJM library here: the switch must fail and restore the simulator."""
+async def test_switch_to_usb_fails_and_restores_sim(client, monkeypatch):
+    """A failed USB open must restore the simulator. The open is forced to
+    fail so a host with LJM and a free T7 attached never touches it."""
+    from tbctl.hw.ljm_iface import DeviceError, LjmDevice
+
+    def no_device(self):
+        raise DeviceError("LJME_DEVICE_NOT_FOUND")
+
+    monkeypatch.setattr(LjmDevice, "open", no_device)
     r = await client.post("/api/connection", json={"mode": "usb"})
     assert r.status_code == 502
     assert "previous connection restored" in r.json()["detail"]

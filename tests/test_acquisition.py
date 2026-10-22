@@ -170,7 +170,11 @@ async def test_stream_restart_leaves_a_gap_not_a_time_shift(chmap, monkeypatch):
     mock.open()
     acq = AcquisitionService(chmap, mock)
     gaps = []
-    acq.on_stream_restart = lambda t0, t1: gaps.append((t0, t1))
+
+    async def on_restart(t0, t1):
+        gaps.append((t0, t1))
+
+    acq.add_restart_hook(on_restart)
     await acq.start()
     try:
         mock.fail_at = time.time() + 0.3

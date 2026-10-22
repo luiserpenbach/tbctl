@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import numpy as np
 
@@ -27,13 +27,22 @@ from tbctl.config.models import (
     ThermocoupleChannel,
 )
 from tbctl.hw.ljm_iface import DeviceInterface
-from tbctl.services.thermocouple import compensated_temp_degc
+from tbctl.services.thermocouple import (
+    T7_TEMP_SENSOR_AIN,
+    compensated_temp_degc,
+    t7_temp_sensor_degc,
+)
 
 log = logging.getLogger(__name__)
 
-CJC_POLL_S = 1.0  # cold-junction temperature refresh interval
 STREAM_READS_HZ = 40  # stream block rate (scans_per_read = scan rate / this)
+STREAM_POLL_S = 0.005  # wait between reads that returned no scans yet
 RESTART_MAX_DELAY_S = 5.0  # back-off cap between stream restart attempts
+# The T7 hardware watchdog only counts host commands, not stream data. With no
+# dashboard connected nothing else talks to the device, the watchdog fires
+# after watchdog_timeout_s and the stream stalls (bench: every ~9 s).
+WATCHDOG_FEED_S = 1.0
+WATCHDOG_FEED_REG = "DIO_STATE"  # any cheap read that works while streaming
 # Streamed DIO image covering DIO 0-15, i.e. every possible sequencer output
 # (FIO0-7 + EIO0-7). Read-only and does not change line direction.
 DIO_SCAN_NAME = "FIO_EIO_STATE"
@@ -158,12 +167,16 @@ class AcquisitionService:
         self._epoch_sample = 0  # _samples_in at _stream_epoch (moves on restart)
         self._samples_in = 0
         self.dropped_scans = 0
-        # called with (gap_start, gap_end) epoch seconds after a stream restart
-        self.on_stream_restart: Callable[[float, float], None] | None = None
         self._capacity_s = capacity_s
         # listeners get (group_name, t_epoch, eu_block) after every ingest;
         # survive reconfigure() so the recorder hook stays attached
         self._listeners: list[Callable[[str, np.ndarray, np.ndarray], None]] = []
+        # awaited with (gap_start, gap_end) epoch seconds after a stream restart
+        self._restart_hooks: list[Callable[[float, float], Awaitable[None]]] = []
+        # False from a failed stream read until the stream is restarted
+        self.stream_ok = True
+        self.stream_error: str | None = None
+        self._fed_at = 0.0  # monotonic time of the last watchdog feed
         self._configure(chmap, capacity_s)
 
     def _configure(self, chmap: ChannelMap, capacity_s: float) -> None:
@@ -189,6 +202,12 @@ class AcquisitionService:
         )
         if self._outputs:
             self._scan_names.append(DIO_SCAN_NAME)
+        # cold junction: stream the T7 temperature sensor, last scan entry
+        self._cj_col: int | None = None
+        if any(isinstance(c, ThermocoupleChannel) for c in inputs):
+            if T7_TEMP_SENSOR_AIN not in self._scan_names:
+                self._scan_names.append(T7_TEMP_SENSOR_AIN)
+            self._cj_col = self._scan_names.index(T7_TEMP_SENSOR_AIN)
         # derived channels: compiled expression + which group they compute on.
         # A derived channel lives in the ring of its fastest referenced
         # channel; references to slower groups are sample-and-hold.
@@ -234,7 +253,6 @@ class AcquisitionService:
         # latest EU value per physical tag, for cross-group sample-and-hold
         self._latest_eu: dict[str, float] = {}
         self._cj_degc = 25.0
-        self._cj_read_at = 0.0
         # latest raw volts per tag (for the raw channel viewer)
         self._latest_raw: dict[str, float] = {}
 
@@ -250,11 +268,24 @@ class AcquisitionService:
         self._listeners.append(fn)
         return lambda: self._listeners.remove(fn)
 
+    def add_restart_hook(self, fn: Callable[[float, float], Awaitable[None]]) -> None:
+        """`await fn(gap_start, gap_end)` after the stream recovers from a failure."""
+        self._restart_hooks.append(fn)
+
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
+        self._samples_in = 0
+        self._epoch_sample = 0
+        await self._start_stream()
+        self._stream_epoch = time.time()
+        self.stream_ok, self.stream_error = True, None
+        self._task = asyncio.create_task(self._run(), name="acquisition")
+
+    async def _start_stream(self) -> None:
         # per-channel range + single-ended/differential, before the stream
-        # starts (stream mode honours both); the T7 defaults are +-10 V vs GND
+        # starts (stream mode honours both); the T7 defaults are +-10 V vs GND,
+        # and a power-cycled T7 is back at those defaults after a restart
         if settings := self._chmap.ain_settings():
             names, values = zip(*settings, strict=True)
             await asyncio.to_thread(self._iface.write_names, list(names), list(values))
@@ -266,10 +297,6 @@ class AcquisitionService:
         if abs(actual - self.scan_rate_hz) / self.scan_rate_hz > 0.01:
             log.warning("device stream rate %.1f != requested %.1f", actual, self.scan_rate_hz)
         self.scan_rate_hz = actual
-        self._stream_epoch = time.time()
-        self._epoch_sample = 0
-        self._samples_in = 0
-        self._task = asyncio.create_task(self._run(), name="acquisition")
 
     async def stop(self) -> None:
         if self._task:
@@ -284,59 +311,68 @@ class AcquisitionService:
         return self._task is not None and not self._task.done()
 
     async def _run(self) -> None:
-        failures = 0
         while True:
+            await self._feed_watchdog()
             try:
                 block, backlog = await asyncio.to_thread(self._iface.stream_read)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                # a stopped stream does not come back by itself: restart it,
-                # backing off (1, 2, 4, 5, 5... s) while the T7 is unreachable
-                failures += 1
-                if failures == 1:
-                    log.exception("stream read failed; restarting stream")
-                await asyncio.sleep(min(RESTART_MAX_DELAY_S, 2.0 ** (failures - 1)))
-                if await self._restart_stream():
-                    failures = 0
+            except Exception as e:
+                await self._restart_stream(e)
+                continue
+            if len(block) == 0:
+                await asyncio.sleep(STREAM_POLL_S)
                 continue
             if backlog > self.scan_rate_hz:  # >1 s behind
                 log.warning("stream backlog %d scans", backlog)
-            await self._poll_cold_junction()
             self._ingest(block)
 
-    async def _restart_stream(self) -> bool:
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(self._iface.stream_stop)
-        try:
-            actual = await asyncio.to_thread(
-                self._iface.stream_start, self._scan_names, self.scan_rate_hz, self._scans_per_read
-            )
-        except Exception as e:
-            log.warning("stream restart failed: %s", e)
-            return False
+    async def _feed_watchdog(self) -> None:
+        """One command per WATCHDOG_FEED_S while this loop runs: the watchdog
+        then fires only when the node (or its acquisition) is dead."""
+        now = time.monotonic()
+        if now - self._fed_at < WATCHDOG_FEED_S:
+            return
+        self._fed_at = now
+        with contextlib.suppress(Exception):  # a dead link shows up in stream_read
+            await asyncio.to_thread(self._iface.read_name, WATCHDOG_FEED_REG)
+
+    async def _restart_stream(self, err: Exception) -> None:
+        """A stopped stream does not come back by itself: restart it, backing
+        off (1, 2, 4, 5, 5... s) while the T7 is unreachable, then report the
+        gap once."""
+        gap_start = self._stream_epoch + (self._samples_in - self._epoch_sample) / self.scan_rate_hz
+        self.stream_ok, self.stream_error = False, str(err)
+        log.warning("stream read failed (%s); restarting stream", err, exc_info=True)
+        attempts = 0
+        while True:
+            await asyncio.sleep(min(RESTART_MAX_DELAY_S, 2.0**attempts))
+            attempts += 1
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(self._iface.stream_stop)
+            try:
+                await self._start_stream()
+                break
+            except Exception as e:
+                log.debug("stream restart attempt %d failed: %s", attempts, e)
         # Sample times count from the stream start, so re-anchor them: the
         # scans lost in between become a visible gap instead of shifting every
         # later sample back. Never before the last kept sample (rings and
         # recordings need increasing time).
-        gap_start = self._stream_epoch + (self._samples_in - self._epoch_sample) / self.scan_rate_hz
-        self.scan_rate_hz = actual
         self._stream_epoch = max(time.time(), gap_start)
         self._epoch_sample = self._samples_in
-        log.warning("stream restarted; no data for %.2f s", self._stream_epoch - gap_start)
-        if self.on_stream_restart:
-            with contextlib.suppress(Exception):
-                self.on_stream_restart(gap_start, self._stream_epoch)
-        return True
-
-    async def _poll_cold_junction(self) -> None:
-        # off the event loop: on USB a device read waits for the stream read
-        now = time.time()
-        if now - self._cj_read_at > CJC_POLL_S:
-            self._cj_read_at = now
-            with contextlib.suppress(Exception):
-                k = await asyncio.to_thread(self._iface.read_name, "TEMPERATURE_DEVICE_K")
-                self._cj_degc = k - 273.15
+        gap_end = self._stream_epoch
+        self.stream_ok, self.stream_error = True, None
+        log.warning(
+            "stream restarted after %.1f s (%d attempts); no data for that span",
+            gap_end - gap_start,
+            attempts,
+        )
+        for hook in list(self._restart_hooks):
+            try:
+                await hook(gap_start, gap_end)
+            except Exception:
+                log.exception("stream restart hook failed")
 
     # -- data path ---------------------------------------------------------
 
@@ -344,6 +380,11 @@ class AcquisitionService:
         n = len(volts)
         if n == 0:
             return
+        if self._cj_col is not None:
+            cj_v = volts[:, self._cj_col]
+            cj_v = cj_v[cj_v > -9000.0]  # drop LJM_DUMMY_VALUE (skipped scans)
+            if len(cj_v):
+                self._cj_degc = t7_temp_sensor_degc(float(np.mean(cj_v)))
         idx = self._samples_in + np.arange(n)
         t = self._stream_epoch + (idx - self._epoch_sample) / self.scan_rate_hz
         n_in = len(self._converters)
@@ -408,6 +449,11 @@ class AcquisitionService:
     @property
     def sample_count(self) -> int:
         return self._samples_in
+
+    @property
+    def device_temp_degc(self) -> float | None:
+        """T7 temperature from the streamed sensor (None without thermocouples)."""
+        return self._cj_degc if self._cj_col is not None else None
 
     def live_window(
         self, tags: list[str], window_s: float, max_points: int = 2000

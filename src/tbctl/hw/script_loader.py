@@ -1,11 +1,19 @@
 """Upload lua/sequencer.lua to the T7 and start it (LUA_* registers).
 
 Deployment flow (LabJack T-series Lua scripting registers):
-  1. Release shared RAM (FIFO/watchdog/AIN_EF) + stop Lua
+  1. Release shared RAM (FIFO/watchdog/AIN_EF) + stop Lua (LUA_RUN_DEFAULT=0)
   2. LUA_SOURCE_SIZE = len(source) + 1 (NUL terminator)
   3. LUA_SOURCE_WRITE <- source bytes (ByteArray API)
-  4. LUA_RUN = 1, wait for INTERP_VERSION
-  5. optionally LUA_SAVE_TO_FLASH + LUA_RUN_DEFAULT=1 *after* a successful start
+  4. optionally LUA_SAVE_TO_FLASH, then LUA_LOAD_SAVED + LUA_SOURCE_SIZE readback
+  5. LUA_RUN = 1, wait for INTERP_VERSION
+  6. optionally LUA_RUN_DEFAULT=1 *after* a successful start
+
+LUA_SAVE_TO_FLASH saves the *loaded source buffer*, and LUA_RUN consumes that
+buffer when it compiles. Saving after LUA_RUN (as this module did until
+2026-10-22) wrote an empty script and still reported success, so nothing ran
+after a power cycle (TODO.md sec 3, test 5). Save with the script stopped and
+the source freshly written (Kipling's order), then run the copy loaded back
+from flash, so a successful start proves the saved script.
 
 After start, the script publishes INTERP_VERSION; refuse to proceed on
 mismatch (sec 6.1).
@@ -34,6 +42,11 @@ _PURGE_LUA = (
     b"LJ.IntervalConfig(0,100)\n"
     b"while true do if LJ.CheckInterval(0) then end end\n\x00"
 )
+
+
+# LUA_SOURCE_SIZE after LUA_LOAD_SAVED may exceed the uploaded size by flash
+# padding (+8 bytes seen on fw 1.0332).
+_FLASH_PAD_MAX = 16
 
 
 class ScriptLoadError(Exception):
@@ -85,11 +98,51 @@ def stop_script(iface: DeviceInterface, timeout_s: float = 3.0) -> None:
     time.sleep(0.2)
 
 
-def _upload_and_run(iface: DeviceInterface, payload: bytes, *, debug: bool = False) -> None:
+def _upload(iface: DeviceInterface, payload: bytes) -> None:
     iface.write_name("LUA_SOURCE_SIZE", len(payload))
     iface.write_name_bytes("LUA_SOURCE_WRITE", payload)
+
+
+def _run(iface: DeviceInterface, *, debug: bool = False) -> None:
     iface.write_name("LUA_DEBUG_ENABLE", 1 if debug else 0)
     iface.write_name("LUA_RUN", 1)
+
+
+def _upload_and_run(iface: DeviceInterface, payload: bytes, *, debug: bool = False) -> None:
+    _upload(iface, payload)
+    _run(iface, debug=debug)
+
+
+def _write_retrying(iface: DeviceInterface, name: str, value: float, tries: int = 10) -> None:
+    # Internal flash is briefly busy after SYSTEM_REBOOT and after a save.
+    for i in range(tries):
+        try:
+            iface.write_name(name, value)
+            return
+        except Exception:
+            if i == tries - 1:
+                raise
+            time.sleep(0.5)
+
+
+def save_loaded_to_flash(iface: DeviceInterface, size: int) -> None:
+    """Save the stopped, just-uploaded source to flash and load it back.
+
+    Leaves the flash copy in the source buffer, ready for LUA_RUN. Raises if
+    the copy read back from flash is shorter than `size` bytes (the empty
+    save this guards against) or implausibly longer. fw 1.0332 reads back
+    size + 8 (padding); running the flash copy afterwards is the real proof.
+    """
+    try:
+        _write_retrying(iface, "LUA_SAVE_TO_FLASH", 1)
+        _write_retrying(iface, "LUA_LOAD_SAVED", 1)
+        saved = int(iface.read_name("LUA_SOURCE_SIZE"))
+    except Exception as e:
+        raise ScriptLoadError(f"saving sequencer.lua to flash failed ({e})") from e
+    if not size <= saved <= size + _FLASH_PAD_MAX:
+        raise ScriptLoadError(
+            f"flash holds a {saved}-byte script after LUA_SAVE_TO_FLASH, expected {size}"
+        )
 
 
 def release_shared_ram(iface: DeviceInterface) -> None:
@@ -149,26 +202,25 @@ def deploy_script(
 
     def _finish(v: int) -> int:
         if save_to_flash:
-            # Internal flash is briefly busy after SYSTEM_REBOOT.
-            last_err: Exception | None = None
-            for _ in range(10):
-                try:
-                    iface.write_name("LUA_SAVE_TO_FLASH", 1)
-                    iface.write_name("LUA_RUN_DEFAULT", 1)
-                    last_err = None
-                    break
-                except Exception as e:
-                    last_err = e
-                    time.sleep(0.5)
-            if last_err is not None:
-                log.warning("script running but flash save failed: %s", last_err)
+            try:
+                _write_retrying(iface, "LUA_RUN_DEFAULT", 1)
+            except Exception as e:
+                # the saved script is fine, but the T7 will not start it at boot
+                raise ScriptLoadError(
+                    f"script saved and running but LUA_RUN_DEFAULT=1 failed ({e}); it "
+                    "will not autostart after a power cycle — redeploy"
+                ) from e
+            log.info("sequencer.lua saved to flash (%d bytes), autostart enabled", len(payload))
         log.info("sequencer.lua running, interp_version %d", v)
         return v
 
     def _attempt(*, debug: bool) -> int | None:
         release_shared_ram(iface)
         iface.write_name(REG_NAME["INTERP_VERSION"], 0)
-        _upload_and_run(iface, payload, debug=debug)
+        _upload(iface, payload)
+        if save_to_flash:
+            save_loaded_to_flash(iface, len(payload))
+        _run(iface, debug=debug)
         return _wait_for_version()
 
     def _reboot_and_retry(*, debug: bool) -> int | None:

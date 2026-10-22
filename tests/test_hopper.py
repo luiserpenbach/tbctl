@@ -193,7 +193,7 @@ def test_dummy_dio_samples_decode_as_unknown(tmp_path):
     acq = AcquisitionService(chmap, MockDevice(chmap))
     ring = acq.rings["default"]
     n_in = len(chmap.inputs())
-    volts = np.zeros((2, n_in + 1))
+    volts = np.zeros((2, n_in + 2))  # inputs, DIO word, T7 temp sensor (CJ)
     volts[0, n_in] = 1 << chmap.bit_index("valve.ox_main")  # ox_main open (active high)
     volts[1, n_in] = -9999.0  # LJM dummy sample
     acq._ingest(volts)

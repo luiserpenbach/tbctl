@@ -91,46 +91,64 @@ def build_router(ctx: NodeContext) -> APIRouter:
 
     @r.get("/status")
     def status() -> dict:
-        regs = ctx.iface.read_names(
-            [
-                REG_NAME["STATE"],
-                REG_NAME["ERROR_CODE"],
-                REG_NAME["CUR_STEP"],
-                REG_NAME["ELAPSED_MS"],
-                REG_NAME["INTERP_VERSION"],
-            ]
-        )
-        dio_state = int(ctx.iface.read_name("DIO_STATE"))
+        # the device can be unreachable (cable pulled, T7 rebooting): report
+        # that instead of failing the whole status poll with a 500
+        device_error = None
+        try:
+            regs = ctx.iface.read_names(
+                [
+                    REG_NAME["STATE"],
+                    REG_NAME["ERROR_CODE"],
+                    REG_NAME["CUR_STEP"],
+                    REG_NAME["ELAPSED_MS"],
+                    REG_NAME["INTERP_VERSION"],
+                ]
+            )
+            dio_state = int(ctx.iface.read_name("DIO_STATE"))
+        except Exception as e:
+            device_error = str(e)
         chmap = ctx.bundle.channels.model
         valve_states = {}
-        for c in chmap.outputs():
-            from tbctl.config.models import dio_number
+        if device_error is None:
+            for c in chmap.outputs():
+                from tbctl.config.models import dio_number
 
-            level = (dio_state >> dio_number(c.hw)) & 1
-            active = level == chmap.active_level(c)
-            valve_states[c.tag] = (
-                ("open" if active else "closed")
-                if c.kind == "valve"
-                else ("on" if active else "off")
-            )
-        return {
-            "time": time.time(),
-            "device": {
-                "connected": ctx.iface.connected,
-                "ip": chmap.device.ip,
-                "sim": ctx.iface.is_sim,
-                "mode": ctx.device_mgr.mode,
-            },
-            "sequencer": {
+                level = (dio_state >> dio_number(c.hw)) & 1
+                active = level == chmap.active_level(c)
+                valve_states[c.tag] = (
+                    ("open" if active else "closed")
+                    if c.kind == "valve"
+                    else ("on" if active else "off")
+                )
+            sequencer = {
                 "state": SeqState(int(regs[0])).name,
                 "error": SeqError(int(regs[1])).name,
                 "cur_step": int(regs[2]),
                 "elapsed_ms": int(regs[3]),
                 "interp_version": int(regs[4]),
-                "redlines_armed": ctx.sequencer.redlines.armed,
+            }
+        else:
+            sequencer = {
+                "state": "UNKNOWN",
+                "error": "DEVICE_UNREACHABLE",
+                "cur_step": 0,
+                "elapsed_ms": 0,
+                "interp_version": 0,
+            }
+        return {
+            "time": time.time(),
+            "device": {
+                "connected": ctx.iface.connected and device_error is None,
+                "ip": chmap.device.ip,
+                "sim": ctx.iface.is_sim,
+                "mode": ctx.device_mgr.mode,
+                "error": device_error,
             },
+            "sequencer": sequencer | {"redlines_armed": ctx.sequencer.redlines.armed},
             "acquisition": {
                 "running": ctx.acq.running,
+                "stream_ok": ctx.acq.stream_ok,
+                "stream_error": ctx.acq.stream_error,
                 "scan_rate_hz": ctx.acq.scan_rate_hz,
                 "sample_count": ctx.acq.sample_count,
             },

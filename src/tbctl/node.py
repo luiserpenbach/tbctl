@@ -88,9 +88,6 @@ def build_context(
     events = EventLog(log_dir or Path("logs"))
     recorder = Recorder(chmap, bundle.channels.sha256, acq, data_dir, _git_hash())
     events.add_sink(recorder.on_event)
-    acq.on_stream_restart = lambda t0, t1: events.log(
-        "stream_restart", gap_start=t0, gap_end=t1, gap_s=round(t1 - t0, 3)
-    )
     sequencer = SequencerService(bundle, iface, acq, events)
     manual = ManualControl(chmap, iface, events)
     device_mgr = DeviceManager(
@@ -126,6 +123,34 @@ def build_context(
         events.log("run_report", run_id=run.run_id, **report["summary"])
 
     recorder.on_stop = _post_stop_review
+
+    async def _on_stream_restart(gap_start: float, gap_end: float) -> None:
+        """Record the outage, then check the sequencer survived it: a USB pull
+        power-cycles a bus-powered T7, which only restarts sequencer.lua if a
+        script was saved to flash."""
+        from tbctl.hw.registers_gen import INTERP_VERSION, REG_NAME
+
+        events.log(
+            "stream_restart",
+            gap_start=gap_start,
+            gap_end=gap_end,
+            gap_s=round(gap_end - gap_start, 3),
+        )
+        try:
+            v = int(await asyncio.to_thread(iface.read_name, REG_NAME["INTERP_VERSION"]))
+        except Exception as e:
+            log.error("interp_version check after stream restart failed: %s", e)
+            return
+        if v != INTERP_VERSION:
+            log.error(
+                "sequencer.lua not running after stream restart (interp_version %d, "
+                "expected %d): run `tbctl deploy-lua` before sequencing",
+                v,
+                INTERP_VERSION,
+            )
+            events.log("lua_not_running", interp_version=v, expected=INTERP_VERSION)
+
+    acq.add_restart_hook(_on_stream_restart)
     return ctx
 
 

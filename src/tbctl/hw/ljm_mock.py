@@ -57,7 +57,7 @@ from tbctl.hw.registers_gen import (
     SeqError,
     SeqState,
 )
-from tbctl.services.thermocouple import type_k_emf_mv
+from tbctl.services.thermocouple import T7_TEMP_SENSOR_AIN, t7_temp_sensor_volts, type_k_emf_mv
 
 _NAME_OF = REG_NAME  # logical -> LJM register name
 DIO_SCAN_NAME = "FIO_EIO_STATE"  # see tbctl.services.acquisition
@@ -589,7 +589,7 @@ class MockDevice:
         self, scan_names: list[str], scan_rate_hz: float, scans_per_read: int
     ) -> float:
         for n in scan_names:
-            if n not in self._by_hw and n != DIO_SCAN_NAME:
+            if n not in self._by_hw and n not in (DIO_SCAN_NAME, T7_TEMP_SENSOR_AIN):
                 raise ValueError(f"cannot stream unknown hw {n!r}")
         self._scan_names = list(scan_names)
         self._scan_rate = float(scan_rate_hz)
@@ -614,6 +614,9 @@ class MockDevice:
             for j, name in enumerate(self._scan_names):
                 if name == DIO_SCAN_NAME:
                     block[i, j] = float(self.dio_word_at(t))
+                elif name == T7_TEMP_SENSOR_AIN:
+                    cj_c = self._regs.get("TEMPERATURE_DEVICE_K", 298.15) - 273.15
+                    block[i, j] = t7_temp_sensor_volts(cj_c)
                 else:
                     block[i, j] = self._volts_for(self._by_hw[name], t)
         self._stream_idx += n

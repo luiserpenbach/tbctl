@@ -16,7 +16,15 @@ CT_USB, CT_ETHERNET = 1, 3
 def fake_ljm(monkeypatch):
     log: list[tuple[str, float]] = []
     ljm = types.SimpleNamespace(
-        constants=types.SimpleNamespace(ctUSB=CT_USB, UINT32=1),
+        constants=types.SimpleNamespace(
+            ctUSB=CT_USB,
+            UINT32=1,
+            STREAM_SCANS_RETURN="LJM_STREAM_SCANS_RETURN",
+            STREAM_SCANS_RETURN_ALL_OR_NONE=2,
+        ),
+        errorcodes=types.SimpleNamespace(NO_SCANS_RETURNED=1309),
+        LJMError=type("LJMError", (Exception,), {}),
+        writeLibraryConfigS=lambda name, value: None,
         transport=CT_USB,
         openS=lambda *a: 7,
         close=lambda h: None,

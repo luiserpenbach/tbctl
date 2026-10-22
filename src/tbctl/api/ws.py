@@ -47,6 +47,7 @@ class WsHub:
         self._ctx = ctx
         self._clients: set[WsClient] = set()
         self._task: asyncio.Task | None = None
+        self._seq_status_failing = False
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._emit_loop(), name="ws-emit")
@@ -102,11 +103,18 @@ class WsHub:
                 except Exception:
                     log.exception("sequencer terminal watch failed")
                 if self._clients:
+                    # off the event loop: a USB read can wait on the device
+                    # lock, and the loop must stay free for an abort request
                     try:
-                        # in a thread: on USB a device read waits for the stream read
                         seq_status = await asyncio.to_thread(self._seq_status)
-                    except Exception:
-                        log.exception("seq status read failed")
+                    except Exception as e:
+                        if not self._seq_status_failing:
+                            log.warning("seq status read failed (%s); retrying quietly", e)
+                        self._seq_status_failing = True
+                    else:
+                        if self._seq_status_failing:
+                            log.info("seq status reads recovered")
+                        self._seq_status_failing = False
             if not self._clients:
                 continue
             for c in list(self._clients):
