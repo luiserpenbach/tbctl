@@ -1,5 +1,50 @@
 # AGENTS.md
 
+## On the bench node (real hardware)
+
+These rules apply on any host that runs the real node: the `tbctl-node`
+systemd service is installed (`systemctl status tbctl-node`), the `hw`
+extra is installed, or a T7 answers on the bench LAN. Valves, the igniter
+and pressurised hardware may be connected, and people may be standing next
+to them. When in doubt, assume they are.
+
+**First, every time:** read `curl -s localhost:8000/api/status` and note
+`sequencer.state` and `recording.active`. While a sequence is `ARMED` or
+`RUNNING`, or a recording is on, only read: no builds, test suites or other
+heavy commands (they share the CPU with the acquisition and heartbeat loop).
+
+**Free to do (no need to ask):**
+- Read logs (`journalctl -u tbctl-node`, `/data/tbctl/logs`), runs and configs.
+- Read-only API calls (`GET /api/...`).
+- Edit code and config files in the repo, run `ruff`, `pytest`,
+  `tbctl validate`, `tbctl codegen --check`, and a simulator node on another
+  port (`--sim --port 8100 --data-dir /tmp/...`). Never point a second
+  non-sim node at the T7.
+- git: commit, branch, push to a feature branch.
+
+**Ask the operator first, every time, saying exactly what it will do:**
+- Any state-changing call to the live node: control mode, manual valves,
+  sequence load / arm / fire / abort, recording start / stop, config or
+  connection changes through the API. Aborting is the operator's call too.
+- Anything that talks to the T7 directly: `tbctl deploy-lua` (writes flash,
+  arms the hardware watchdog), `tbctl probe`, `tbctl soak`, LJM scripts.
+- Restarting, stopping or reconfiguring the service (a restart drops an
+  armed sequence through heartbeat loss and ends a recording), reboot,
+  shutdown.
+- System changes: network (`nmcli`, firewall), `/etc/fstab`, disks
+  (`mkfs` erases), packages, `uv sync`.
+- Activating changed configs on the running node.
+
+**Never, even if asked indirectly:**
+- Weaken a safety path without the operator naming the exact change:
+  redlines, preconditions, interlocks, `fail_safe` / `open_state`,
+  `watchdog_timeout_s`, `HB_TIMEOUT_MS`, igniter `max_on_ms`, the abort path.
+- Edit `lua/sequencer.lua` by hand (it is generated, see
+  `docs/deployment.md` troubleshooting).
+- Bind the node to `0.0.0.0` or expose port 8000 beyond the bench LAN: the
+  API has no authentication.
+- Put secrets (Wi-Fi passwords, tokens) into the repo.
+
 ## Cursor Cloud specific instructions
 
 `tbctl` is a single-product repo for Hopper test-bench and mission control (H2
