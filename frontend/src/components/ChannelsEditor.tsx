@@ -20,6 +20,7 @@ interface Chan {
   negative_ch?: string | null;
   cal?: Cal;
   rate_group?: string;
+  average?: boolean;
   fail_safe?: string;
   open_state?: string;
   on_state?: string;
@@ -211,6 +212,22 @@ function ChannelForm({
             <span style={{ textTransform: "none", letterSpacing: 0 }}>
               {c.negative_ch ? "differential" : "single-ended"}
             </span>
+          </div>
+        )}
+        {(isAnalog || c.kind === "thermocouple_k") && (
+          <div
+            className="modal-row"
+            title="record the mean of every stream scan in each sample period; the stream then runs at ≥1 kHz. At 50 Hz this cancels 50 Hz mains hum and cuts noise ~4–5×, at ~half a period (10 ms) of extra lag"
+          >
+            <span style={{ width: 70 }}>average</span>
+            <label style={{ display: "flex", gap: 5, alignItems: "center", textTransform: "none", letterSpacing: 0 }}>
+              <input
+                type="checkbox"
+                checked={c.average ?? false}
+                onChange={(e) => upd({ average: e.target.checked })}
+              />
+              mean over each sample period (stream ≥ 1 kHz)
+            </label>
           </div>
         )}
         {isAnalog && c.cal && (

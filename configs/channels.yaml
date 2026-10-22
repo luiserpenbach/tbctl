@@ -10,6 +10,11 @@
 # Every input's `range` (+-10/1/0.1/0.01 V) and `negative_ch` (differential
 # pair; omit for single-ended) are written to the T7 before each stream
 # start. Thermocouples default to +-0.1 V.
+#
+# `average: true` (inputs, default false) records the mean of every stream
+# scan in each sample period instead of one scan; the stream then runs at
+# >= 1 kHz. At 50 Hz that is one mains period: hum cancels and noise drops
+# ~4-5x, for ~10 ms extra lag. Every input rate group must divide 1000 Hz.
 device:
   ip: 192.168.10.20
   connection: ethernet   # "usb" for laptop bench testing (ip then ignored)

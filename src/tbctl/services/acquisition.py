@@ -1,7 +1,9 @@
 """Acquisition: stream config, EU conversion, ring buffers (spec §3).
 
-One T7 stream runs at the fastest rate any configured channel needs; slower
-rate groups are decimated by an integer factor into their own ring buffers.
+One T7 stream runs at the fastest rate any configured channel needs (at least
+AVERAGE_STREAM_HZ when a channel averages); slower rate groups are decimated
+by an integer factor into their own ring buffers, either keeping one scan per
+sample period or, for `average: true` channels, the mean of all of them.
 v1 ships with everything at 50 Hz, but the rate-group mechanism already
 carries a future 1 kHz group (D4).
 """
@@ -185,9 +187,7 @@ class AcquisitionService:
         self._scan_channels = inputs  # scan list order == channel order
         self._scan_names = [c.hw for c in inputs]
         self._converters = [_make_converter(c) for c in inputs]
-        self.scan_rate_hz = max(
-            (chmap.rate_groups[c.rate_group].rate_hz for c in inputs), default=50.0
-        )
+        self.scan_rate_hz = chmap.stream_rate_hz()
         # outputs: one extra scan entry (the DIO word), split into a 0/1
         # "open/on" column per output, recorded in the fastest input group
         self._outputs = chmap.outputs() if chmap.device.record_outputs and inputs else []
@@ -223,6 +223,10 @@ class AcquisitionService:
         self._group_cols: dict[str, list[int]] = {}
         self._group_decim: dict[str, int] = {}
         self._group_phys: dict[str, dict[str, int]] = {}  # tag -> col within group block
+        # averaged channels: positions within the group block, and the volts
+        # of the scans since the last completed window (carried across reads)
+        self._group_avg: dict[str, list[int]] = {}
+        self._avg_carry: dict[str, np.ndarray] = {}
         for group, rg in chmap.rate_groups.items():
             tags = [c.tag for c in inputs if c.rate_group == group]
             otags = [c.tag for c in self._outputs] if group == output_group else []
@@ -243,6 +247,8 @@ class AcquisitionService:
             self._group_decim[group] = round(factor)
             self._group_cols[group] = [self._scan_names.index(chmap.by_tag(t).hw) for t in tags]
             self._group_phys[group] = {t: k for k, t in enumerate(tags)}
+            self._group_avg[group] = [k for k, t in enumerate(tags) if chmap.by_tag(t).average]
+            self._avg_carry[group] = np.empty((0, len(self._group_avg[group])))
             self.rings[group] = RingBuffer(tags + otags + dtags, rg.rate_hz, capacity_s)
         self._output_group = output_group
         self._tag_group = (
@@ -277,6 +283,7 @@ class AcquisitionService:
     async def start(self) -> None:
         self._samples_in = 0
         self._epoch_sample = 0
+        self._clear_avg_carry()
         await self._start_stream()
         self._stream_epoch = time.time()
         self.stream_ok, self.stream_error = True, None
@@ -361,6 +368,7 @@ class AcquisitionService:
         # recordings need increasing time).
         self._stream_epoch = max(time.time(), gap_start)
         self._epoch_sample = self._samples_in
+        self._clear_avg_carry()  # a window cut by the outage is not averaged across it
         gap_end = self._stream_epoch
         self.stream_ok, self.stream_error = True, None
         log.warning(
@@ -376,6 +384,27 @@ class AcquisitionService:
 
     # -- data path ---------------------------------------------------------
 
+    def _clear_avg_carry(self) -> None:
+        for group, avg in self._group_avg.items():
+            self._avg_carry[group] = np.empty((0, len(avg)))
+
+    def _window_means(self, group: str, volts: np.ndarray, ends: np.ndarray) -> np.ndarray:
+        """Mean volts of each window ending at a True row of `ends`, including
+        scans carried over from earlier reads. Skipped scans (LJM_DUMMY_VALUE)
+        are left out; a window with no valid scan is NaN. The first window
+        after a start or restart can be shorter than a full period."""
+        buf = np.vstack([self._avg_carry[group], volts])
+        valid = buf > -9000.0
+        zero = np.zeros((1, buf.shape[1]))
+        sums = np.vstack([zero, np.cumsum(np.where(valid, buf, 0.0), axis=0)])
+        counts = np.vstack([zero, np.cumsum(valid, axis=0)])
+        last = len(self._avg_carry[group]) + np.flatnonzero(ends)  # inclusive, in buf rows
+        first = np.concatenate([[0], last[:-1] + 1])
+        with np.errstate(invalid="ignore", divide="ignore"):
+            means = (sums[last + 1] - sums[first]) / (counts[last + 1] - counts[first])
+        self._avg_carry[group] = buf[last[-1] + 1 :] if len(last) else buf
+        return means
+
     def _ingest(self, volts: np.ndarray) -> None:
         n = len(volts)
         if n == 0:
@@ -388,9 +417,7 @@ class AcquisitionService:
         idx = self._samples_in + np.arange(n)
         t = self._stream_epoch + (idx - self._epoch_sample) / self.scan_rate_hz
         n_in = len(self._converters)
-        eu = np.empty((n, n_in), dtype=np.float64)
-        for j, conv in enumerate(self._converters):
-            eu[:, j] = conv(volts[:, j], self._cj_degc)
+        for j in range(n_in):
             self._latest_raw[self._scan_channels[j].tag] = float(volts[-1, j])
         if self._outputs:
             raw = volts[:, n_in]
@@ -406,11 +433,23 @@ class AcquisitionService:
         blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         for group in self.rings:
             decim = self._group_decim[group]
-            mask = idx % decim == 0
+            avg = self._group_avg[group]
+            cols = self._group_cols[group]
+            if avg:
+                # one sample per completed window, stamped at its last scan
+                mask = idx % decim == decim - 1
+                means = self._window_means(group, volts[:, [cols[k] for k in avg]], mask)
+            else:
+                mask = idx % decim == 0
             if not mask.any():
                 continue
-            gt = t[mask]
-            gv = eu[np.ix_(mask, self._group_cols[group])]
+            rows = np.flatnonzero(mask)
+            gt = t[rows]
+            # convert only the kept samples (the stream may run far faster)
+            gv = np.empty((len(rows), len(cols)), dtype=np.float64)
+            for k, col in enumerate(cols):
+                v = means[:, avg.index(k)] if k in avg else volts[rows, col]
+                gv[:, k] = self._converters[col](v, self._cj_degc)
             if group == self._output_group:
                 gv = np.column_stack([gv, states[mask]])
             blocks[group] = (gt, gv)

@@ -41,6 +41,10 @@ MAX_OUTPUT_BITS = 16
 # in the lower half of its 16-channel block (AIN48/AIN56 ... AIN55/AIN63).
 AIN_RANGES = (10.0, 1.0, 0.1, 0.01)
 SINGLE_ENDED = 199
+# A channel with `average: true` records the mean of all stream scans in each
+# of its sample periods; the stream then runs at least this fast. At 50 Hz
+# that is 20 scans = one 50 Hz mains period, so hum and its harmonics cancel.
+AVERAGE_STREAM_HZ = 1000.0
 
 
 def ain_number(hw: str) -> int:
@@ -171,6 +175,8 @@ class AnalogInChannel(StrictModel):
     negative_ch: str | None = None
     cal: Cal = PolynomialCal(kind="polynomial", coeffs=[0.0, 1.0])
     rate_group: str = "default"
+    # mean of the stream scans in each sample period (see AVERAGE_STREAM_HZ)
+    average: bool = False
 
     @field_validator("hw")
     @classmethod
@@ -202,6 +208,8 @@ class ThermocoupleChannel(StrictModel):
     range: float = 0.1
     negative_ch: str | None = None  # thermocouples are usually wired differential
     rate_group: str = "default"
+    # mean of the stream scans in each sample period (see AVERAGE_STREAM_HZ)
+    average: bool = False
 
     @field_validator("hw")
     @classmethod
@@ -323,6 +331,20 @@ class ChannelMap(StrictModel):
         for c in self.channels:
             if isinstance(c, InputChannel) and c.rate_group not in self.rate_groups:
                 raise ValueError(f"{c.tag}: unknown rate_group {c.rate_group!r}")
+        if any(c.average for c in self.inputs()):
+            stream = self.stream_rate_hz()
+            for c in self.inputs():
+                rate = self.rate_groups[c.rate_group].rate_hz
+                if abs(stream / rate - round(stream / rate)) > 1e-9:
+                    raise ValueError(
+                        f"{c.tag}: rate group {c.rate_group} ({rate:g} Hz) must divide the "
+                        f"stream rate, {stream:g} Hz with averaging on"
+                    )
+                if c.average and rate >= stream:
+                    raise ValueError(
+                        f"{c.tag}: average has no effect at {rate:g} Hz, the stream rate "
+                        "(each sample is a single scan)"
+                    )
         # derived channels: refs must be existing physical inputs (no chaining)
         physical = {c.tag for c in self.channels if isinstance(c, InputChannel)}
         from tbctl.config.expr import expr_refs
@@ -356,6 +378,15 @@ class ChannelMap(StrictModel):
     def inputs(self) -> list[InputChannel]:
         """Physical (hardware-scanned) input channels."""
         return [c for c in self.channels if isinstance(c, InputChannel)]
+
+    def stream_rate_hz(self) -> float:
+        """T7 scan rate: the fastest input rate group, raised to
+        AVERAGE_STREAM_HZ when any channel averages."""
+        inputs = self.inputs()
+        fastest = max((self.rate_groups[c.rate_group].rate_hz for c in inputs), default=50.0)
+        if any(c.average for c in inputs):
+            return max(fastest, AVERAGE_STREAM_HZ)
+        return fastest
 
     def ain_settings(self) -> list[tuple[str, float]]:
         """(register, value) pairs configuring every scanned AIN: range and
