@@ -141,9 +141,11 @@ valve power off, 50 Hz stream, Windows laptop; branch `fix/hw-checkout-usb`):
       with the gap in the run, data resuming at the right wall time. On USB,
       device calls are serialised behind the stream read; on Ethernet they
       are not. Run Test 2 (abort latency) with the stream running on the
-      connection you will fire with. USB done 2026-10-22 (see the bench
-      checkout above, before merging main's restart change: re-run once);
-      Ethernet still open.
+      connection you will fire with. USB done 2026-10-22 (bench checkout
+      above), re-run after merging main's restart change: abort CMD 4.8 ms
+      median, USB pull -> one 12.1 s gap (back-off), `stream_restart`
+      event, AIN range restored, sequencer.lua back from flash. Ethernet
+      still open.
 - [ ] Fill in the sign-off table.
 
 ## 4. Sensor and actuator checkout
