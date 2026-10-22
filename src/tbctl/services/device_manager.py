@@ -191,25 +191,34 @@ class DeviceManager:
         out: dict = {
             "mode": self.mode,
             "ip": self.ip or self._chmap.device.ip,
-            "connected": self.device.connected,
+            # the LJM handle stays open through a cable pull; the stream is
+            # what actually tells whether the device is reachable
+            "connected": self.device.connected and self._acq.stream_ok,
             "sim": self.device.is_sim,
             "last_error": self.last_error,
             "switched_at": self.switched_at,
             "stream": {
                 "running": self._acq.running,
+                "ok": self._acq.stream_ok,
+                "error": self._acq.stream_error,
                 "scan_rate_hz": self._acq.scan_rate_hz,
                 "sample_count": self._acq.sample_count,
             },
         }
         try:
-            vals = self.device.read_names(
-                ["SERIAL_NUMBER", "FIRMWARE_VERSION", "TEMPERATURE_DEVICE_K"]
-            )
+            vals = self.device.read_names(["SERIAL_NUMBER", "FIRMWARE_VERSION"])
             out["device"] = {
                 "serial": int(vals[0]),
                 "firmware": round(float(vals[1]), 4),
-                "temp_degc": round(float(vals[2]) - 273.15, 1),
+                "temp_degc": None,
             }
+            # TEMPERATURE_DEVICE_K is refused while streaming (STREAM_IS_ACTIVE)
+            temp = self._acq.device_temp_degc
+            if temp is None:
+                with contextlib.suppress(Exception):
+                    temp = self.device.read_name("TEMPERATURE_DEVICE_K") - 273.15
+            if temp is not None:
+                out["device"]["temp_degc"] = round(temp, 1)
         except Exception as e:
             out["device"] = {"error": str(e)}
         try:

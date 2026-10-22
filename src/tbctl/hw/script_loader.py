@@ -161,7 +161,12 @@ def deploy_script(
                     last_err = e
                     time.sleep(0.5)
             if last_err is not None:
-                log.warning("script running but flash save failed: %s", last_err)
+                # a running RAM-only script passes `tbctl probe` but is gone
+                # after the next power cycle (a USB pull on a bus-powered T7)
+                raise ScriptLoadError(
+                    f"script running but NOT saved to flash ({last_err}); it will not "
+                    "survive a power cycle — redeploy"
+                )
         log.info("sequencer.lua running, interp_version %d", v)
         return v
 

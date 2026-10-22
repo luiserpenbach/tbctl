@@ -80,6 +80,29 @@ and tests running. None of them describes Hopper hardware.
 analyser) did not sign off. Re-run `tools/run_timing_report.py` on the
 Hopper T7, with a logic analyser on the outputs:
 
+**USB bench checkout 2026-10-22** (T7 470011571, fw 1.0332, bus-powered,
+valve power off, 50 Hz stream, Windows laptop; branch `fix/hw-checkout-usb`):
+
+- Stream + dashboard 5 min: no `stream backlog`, no sample loss. At 50 Hz
+  `scans_per_read` rounds to 1, so it is 50 reads/s, not 40.
+- Test 2 abort latency **with the stream running**, via the node API: CMD
+  write 15-55 ms before the fix (abort waited on the USB lock behind a
+  blocking `eStreamRead`), **4-7 ms after** (non-blocking reads). Abort seen
+  in STATE within 8-12 ms including a ~4 ms register peek. No logic analyser.
+- USB pull ~5 s while recording: the stream now restarts on its own, logs
+  `stream restarted after 9.1 s`, records a `stream_restart` event and a
+  9.1 s gap at the right wall-clock time, and re-applies AIN range /
+  negative_ch (before the fix: no gap, samples stamped 9.35 s early, ±10 V).
+- **Test 5 (power cycle) FAILS on this T7, twice:** after the pull,
+  `LUA_RUN_DEFAULT=1` but `LUA_SOURCE_SIZE=0` and `interp_version` 0. No
+  script runs from flash, even right after a `tbctl deploy-lua` that
+  reported the flash save OK. The node now logs an error and a
+  `lua_not_running` event; the cause is not found yet.
+- Thermocouples: the cold junction is now the streamed AIN14 sensor
+  (`TEMPERATURE_DEVICE_K` is refused while streaming, so CJC was stuck at
+  25 °C); it matches `TEMPERATURE_DEVICE_K` within 0.001 K. Open/saturated
+  TC inputs read NaN instead of ±1e12 °C.
+
 - [ ] Test 1, step timing: the full 100-step `timing_test`, every edge within
       3 ms. It **FAILED** last time (Lua out of memory, only 8/100 steps ran).
       The streaming LOAD parse that fixes this has not run on hardware yet,

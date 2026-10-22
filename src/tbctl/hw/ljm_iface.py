@@ -66,9 +66,10 @@ class DeviceInterface(Protocol):
         ...
 
     def stream_read(self) -> tuple[np.ndarray, int]:
-        """Blocking read of one block: (scans x channels) float64, device backlog.
+        """Read one block: (scans x channels) float64, device backlog.
 
-        Blocks until scans_per_read scans are available.
+        May block until scans_per_read scans are available, or return an empty
+        (0 x channels) block when none are ready yet; callers poll again.
         """
         ...
 
@@ -192,15 +193,27 @@ class LjmDevice:
             # the dense sequencer; 2048 is the practical ceiling on USB.
             with contextlib.suppress(Exception):
                 self._ljm.eWriteName(self._h(), "STREAM_BUFFER_SIZE_BYTES", 2048)
+            # eStreamRead returns at once (LJME_NO_SCANS_RETURNED) instead of
+            # waiting for a full block while holding _io; a blocking read
+            # stalled every command, including CMD=ABORT, by up to one block.
+            self._ljm.writeLibraryConfigS(
+                self._ljm.constants.STREAM_SCANS_RETURN,
+                self._ljm.constants.STREAM_SCANS_RETURN_ALL_OR_NONE,
+            )
             actual = self._ljm.eStreamStart(
                 self._h(), scans_per_read, len(addrs), addrs, scan_rate_hz
             )
             return float(actual)
 
     def stream_read(self) -> tuple[np.ndarray, int]:
+        n_ch = len(self._scan_names)
         with self._io:
-            raw, device_backlog, _ljm_backlog = self._ljm.eStreamRead(self._h())
-            n_ch = len(self._scan_names)
+            try:
+                raw, device_backlog, _ljm_backlog = self._ljm.eStreamRead(self._h())
+            except self._ljm.LJMError as e:
+                if e.errorCode == self._ljm.errorcodes.NO_SCANS_RETURNED:
+                    return np.empty((0, n_ch), dtype=np.float64), 0
+                raise
             data = np.asarray(raw, dtype=np.float64).reshape(-1, n_ch)
             return data, int(device_backlog)
 

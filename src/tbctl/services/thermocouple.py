@@ -77,6 +77,27 @@ _INV_HIGH = [  # 20.644..54.886 mV  (500..1372 degC)
 ]
 
 
+_EMF_MIN_MV = -5.891  # -200 degC, low end of _INV_NEG
+_EMF_MAX_MV = 54.886  # 1372 degC, high end of _INV_HIGH
+
+# T7 internal temperature sensor on AIN14 (datasheet: TEMPERATURE_DEVICE_K =
+# -92.6 K/V * AIN14 + 467.6 K). TEMPERATURE_DEVICE_K itself cannot be read
+# while a stream runs (STREAM_IS_ACTIVE), so the cold junction is streamed.
+T7_TEMP_SENSOR_AIN = "AIN14"
+_T7_TEMP_SLOPE_K_PER_V = -92.6
+_T7_TEMP_OFFSET_K = 467.6
+
+
+def t7_temp_sensor_degc(volts: float) -> float:
+    """AIN14 volts -> T7 device (cold-junction) temperature, degC."""
+    return _T7_TEMP_SLOPE_K_PER_V * volts + _T7_TEMP_OFFSET_K - 273.15
+
+
+def t7_temp_sensor_volts(t_degc: float) -> float:
+    """Inverse of t7_temp_sensor_degc (simulator)."""
+    return (t_degc + 273.15 - _T7_TEMP_OFFSET_K) / _T7_TEMP_SLOPE_K_PER_V
+
+
 def _poly(coeffs: list[float], x: float) -> float:
     acc = 0.0
     for c in reversed(coeffs):
@@ -92,7 +113,14 @@ def type_k_emf_mv(t_degc: float) -> float:
 
 
 def type_k_temp_degc(emf_mv: float) -> float:
-    """Inverse: EMF (mV) -> junction temperature (degC)."""
+    """Inverse: EMF (mV) -> junction temperature (degC).
+
+    NaN outside the fitted -5.891..54.886 mV: an open or saturated input
+    (e.g. -0.106 V on the +-0.1 V range) otherwise evaluates the polynomial
+    far out of range and returns values like -6e12 degC.
+    """
+    if not _EMF_MIN_MV <= emf_mv <= _EMF_MAX_MV:
+        return math.nan
     if emf_mv < 0.0:
         return _poly(_INV_NEG, emf_mv)
     if emf_mv < 20.644:
