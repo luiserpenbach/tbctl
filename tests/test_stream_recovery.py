@@ -66,7 +66,7 @@ async def _wait(cond, timeout=5.0):
 
 
 async def test_restart_leaves_gap_and_reapplies_ain(chmap, monkeypatch):
-    monkeypatch.setattr(acquisition, "STREAM_RESTART_S", 0.05)
+    monkeypatch.setattr(acquisition, "RESTART_MAX_DELAY_S", 0.05)
     dev = FlakyDevice(chmap, outage_s=0.5)
     dev.open()
     acq = AcquisitionService(chmap, dev)
@@ -193,7 +193,7 @@ async def test_restart_hook_logs_event_and_checks_lua(node):
     events = [e["event"] for e in ctx.events.tail(10)]
     assert "stream_restart" in events and "lua_not_running" not in events
     restart = next(e for e in ctx.events.tail(10) if e["event"] == "stream_restart")
-    assert restart["outage_s"] == pytest.approx(9.35)
+    assert restart["gap_s"] == pytest.approx(9.35)
     # power-cycled T7 without a flashed script: interp_version reads 0
     ctx.iface.backend._regs[REG_NAME["INTERP_VERSION"]] = 0.0
     await hook(200.0, 201.0)

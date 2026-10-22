@@ -75,6 +75,7 @@ class WsHub:
                 REG_NAME["ELAPSED_MS"],
                 REG_NAME["STEP_COUNT"],
                 REG_NAME["CRC16"],
+                "DIO_STATE",
             ]
         )
         return {
@@ -86,7 +87,7 @@ class WsHub:
             "elapsed_ms": int(regs[3]),
             "step_count": int(regs[4]),
             "crc16": int(regs[5]),
-            "dio_state": int(iface.read_name("DIO_STATE")),
+            "dio_state": int(regs[6]),
         }
 
     async def _emit_loop(self) -> None:

@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 STREAM_READS_HZ = 40  # stream block rate (scans_per_read = scan rate / this)
 STREAM_POLL_S = 0.005  # wait between reads that returned no scans yet
-STREAM_RESTART_S = 1.0  # retry interval while the device is unreachable
+RESTART_MAX_DELAY_S = 5.0  # back-off cap between stream restart attempts
 # Streamed DIO image covering DIO 0-15, i.e. every possible sequencer output
 # (FIO0-7 + EIO0-7). Read-only and does not change line direction.
 DIO_SCAN_NAME = "FIO_EIO_STATE"
@@ -159,6 +159,7 @@ class AcquisitionService:
         self._iface = iface
         self._task: asyncio.Task | None = None
         self._stream_epoch = 0.0
+        self._epoch_sample = 0  # _samples_in at _stream_epoch (moves on restart)
         self._samples_in = 0
         self.dropped_scans = 0
         self._capacity_s = capacity_s
@@ -269,7 +270,9 @@ class AcquisitionService:
 
     async def start(self) -> None:
         self._samples_in = 0
+        self._epoch_sample = 0
         await self._start_stream()
+        self._stream_epoch = time.time()
         self.stream_ok, self.stream_error = True, None
         self._task = asyncio.create_task(self._run(), name="acquisition")
 
@@ -288,10 +291,6 @@ class AcquisitionService:
         if abs(actual - self.scan_rate_hz) / self.scan_rate_hz > 0.01:
             log.warning("device stream rate %.1f != requested %.1f", actual, self.scan_rate_hz)
         self.scan_rate_hz = actual
-        # sample n is stamped epoch + n / rate; anchoring the epoch so the next
-        # sample lands at "now" keeps sample_count monotonic and leaves the
-        # outage as a gap in the time axis
-        self._stream_epoch = time.time() - self._samples_in / self.scan_rate_hz
 
     async def stop(self) -> None:
         if self._task:
@@ -322,13 +321,15 @@ class AcquisitionService:
             self._ingest(block)
 
     async def _restart_stream(self, err: Exception) -> None:
-        """Retry until the stream runs again, then report the gap once."""
-        gap_start = self._stream_epoch + self._samples_in / self.scan_rate_hz
+        """A stopped stream does not come back by itself: restart it, backing
+        off (1, 2, 4, 5, 5... s) while the T7 is unreachable, then report the
+        gap once."""
+        gap_start = self._stream_epoch + (self._samples_in - self._epoch_sample) / self.scan_rate_hz
         self.stream_ok, self.stream_error = False, str(err)
-        log.warning("stream read failed (%s); restarting every %.0f s", err, STREAM_RESTART_S)
+        log.warning("stream read failed (%s); restarting stream", err, exc_info=True)
         attempts = 0
         while True:
-            await asyncio.sleep(STREAM_RESTART_S)
+            await asyncio.sleep(min(RESTART_MAX_DELAY_S, 2.0**attempts))
             attempts += 1
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(self._iface.stream_stop)
@@ -337,10 +338,16 @@ class AcquisitionService:
                 break
             except Exception as e:
                 log.debug("stream restart attempt %d failed: %s", attempts, e)
-        gap_end = self._stream_epoch + self._samples_in / self.scan_rate_hz
+        # Sample times count from the stream start, so re-anchor them: the
+        # scans lost in between become a visible gap instead of shifting every
+        # later sample back. Never before the last kept sample (rings and
+        # recordings need increasing time).
+        self._stream_epoch = max(time.time(), gap_start)
+        self._epoch_sample = self._samples_in
+        gap_end = self._stream_epoch
         self.stream_ok, self.stream_error = True, None
         log.warning(
-            "stream restarted after %.1f s (%d attempts); no samples for that span",
+            "stream restarted after %.1f s (%d attempts); no data for that span",
             gap_end - gap_start,
             attempts,
         )
@@ -362,7 +369,7 @@ class AcquisitionService:
             if len(cj_v):
                 self._cj_degc = t7_temp_sensor_degc(float(np.mean(cj_v)))
         idx = self._samples_in + np.arange(n)
-        t = self._stream_epoch + idx / self.scan_rate_hz
+        t = self._stream_epoch + (idx - self._epoch_sample) / self.scan_rate_hz
         n_in = len(self._converters)
         eu = np.empty((n, n_in), dtype=np.float64)
         for j, conv in enumerate(self._converters):

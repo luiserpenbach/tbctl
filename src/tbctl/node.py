@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import socket
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -133,7 +134,7 @@ def build_context(
             "stream_restart",
             gap_start=gap_start,
             gap_end=gap_end,
-            outage_s=round(gap_end - gap_start, 3),
+            gap_s=round(gap_end - gap_start, 3),
         )
         try:
             v = int(await asyncio.to_thread(iface.read_name, REG_NAME["INTERP_VERSION"]))
@@ -209,11 +210,25 @@ def build_app(ctx: NodeContext) -> FastAPI:
     return app
 
 
+def _listen_socket(host: str, port: int) -> socket.socket:
+    """A bound TCP socket for one listen address (uvicorn listens on it)."""
+    sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    return sock
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tbctl-node", description="testbench control node")
     parser.add_argument("--config-dir", default="configs")
     parser.add_argument("--sim", action="store_true", help="run against the built-in simulator")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        action="append",
+        help="listen address, repeatable (default 0.0.0.0). On the bench node use "
+        "127.0.0.1 plus the bench-LAN address so a second interface (Wi-Fi) "
+        "never exposes the API",
+    )
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--log-level", default="info")
     parser.add_argument("--data-dir", default="data/runs", help="run HDF5 directory (USB SSD)")
@@ -235,7 +250,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config invalid:\n{e}", file=sys.stderr)
         return 1
     app = build_app(ctx)
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    sockets = []
+    for host in args.host or ["0.0.0.0"]:
+        try:
+            sockets.append(_listen_socket(host, args.port))
+        except OSError as e:
+            # an address that is not up yet (cable out at boot) fails here;
+            # systemd restarts the node until it is
+            print(f"cannot listen on {host}:{args.port}: {e}", file=sys.stderr)
+            return 1
+    server = uvicorn.Server(uvicorn.Config(app, port=args.port, log_level=args.log_level))
+    server.run(sockets=sockets)
     return 0
 
 

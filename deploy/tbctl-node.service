@@ -3,11 +3,18 @@
 #   sudo cp deploy/tbctl-node.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now tbctl-node
 # Simulator/training mode: add --sim to ExecStart (or use a drop-in).
+#
+# The API has no authentication, so it listens on loopback and the bench-LAN
+# address only, never 0.0.0.0: a second interface (Wi-Fi uplink for updates
+# or remote help) must not expose valve control. Keep the second --host equal
+# to the node's bench IP (docs/deployment.md, network plan).
 
 [Unit]
 Description=tbctl testbench control node
 After=network-online.target data-tbctl.mount
 Wants=network-online.target
+# keep retrying while the bench address is not up yet (cable out at boot)
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -18,7 +25,7 @@ ExecStart=/opt/tbctl/.venv/bin/tbctl-node \
     --config-dir /opt/tbctl/configs \
     --data-dir /data/tbctl/runs \
     --log-dir /data/tbctl/logs \
-    --host 0.0.0.0 --port 8000
+    --host 127.0.0.1 --host 192.168.10.10 --port 8000
 Restart=on-failure
 RestartSec=2
 # the node is the only writer of runs/events; keep the rest read-only
