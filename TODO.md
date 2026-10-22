@@ -105,6 +105,13 @@ Hopper T7, with a logic analyser on the outputs:
       display latency. During the soak, with the UI open on the Pi, check
       for `stream backlog` warnings in the node log and skipped scans. If there are, raise the block size via `STREAM_READS_HZ` in
       `services/acquisition.py`.
+- [ ] **Stream restart and USB locking:** while streaming and recording,
+      pull the T7 cable for ~5 s and plug it back in. Expect: a
+      `stream restarted` warning in the node log, a `stream_restart` event
+      with the gap in the run, data resuming at the right wall time. On USB,
+      device calls are serialised behind the stream read; on Ethernet they
+      are not. Run Test 2 (abort latency) with the stream running on the
+      connection you will fire with.
 - [ ] Fill in the sign-off table.
 
 ## 4. Sensor and actuator checkout

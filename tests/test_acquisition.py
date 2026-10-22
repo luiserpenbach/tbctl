@@ -145,3 +145,44 @@ def test_ring_reads_match_brute_force_across_wraps():
             keep = (all_t > t0) & ((all_t <= t1) if t1 is not None else True)
             np.testing.assert_array_equal(got_t, all_t[keep])
             np.testing.assert_array_equal(got_v, all_v[keep])
+
+
+async def test_stream_restart_leaves_a_gap_not_a_time_shift(chmap, monkeypatch):
+    """A failed stream read restarts the stream; samples after it keep wall
+    time (a gap), instead of continuing the old count 1+ s too early."""
+    import asyncio
+    import time
+
+    import tbctl.services.acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "RESTART_MAX_DELAY_S", 0.3)
+
+    class Flaky(MockDevice):
+        fail_at: float | None = None
+
+        def stream_read(self):
+            if self.fail_at is not None and time.time() > self.fail_at:
+                self.fail_at = None
+                raise RuntimeError("LJME_NO_RESPONSE_BYTES_RECEIVED")
+            return super().stream_read()
+
+    mock = Flaky(chmap)
+    mock.open()
+    acq = AcquisitionService(chmap, mock)
+    gaps = []
+    acq.on_stream_restart = lambda t0, t1: gaps.append((t0, t1))
+    await acq.start()
+    try:
+        mock.fail_at = time.time() + 0.3
+        await asyncio.sleep(1.2)
+        tag = "pressure.chamber"
+        t = acq.live_window([tag], window_s=30, max_points=100_000)[tag]["t"]
+        assert len(gaps) == 1
+        assert abs(t[-1] - time.time()) < 0.2  # not shifted back by the outage
+        assert max(np.diff(t)) >= 0.2  # the outage is visible as a gap
+        assert np.all(np.diff(t) > 0)
+        count = acq.sample_count
+        await asyncio.sleep(0.1)
+        assert acq.sample_count > count  # streaming again
+    finally:
+        await acq.stop()

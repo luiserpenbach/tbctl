@@ -13,6 +13,7 @@ LJM from ljm_constants.json); tbctl logical slots come from
 from __future__ import annotations
 
 import contextlib
+import threading
 from typing import Protocol
 
 import numpy as np
@@ -86,23 +87,43 @@ class LjmDevice:
         self._ljm = None
         self._scan_names: list[str] = []
         self._scans_per_read = 0
+        # On USB, stream reads and command-response (status, cold-junction)
+        # from different threads collide and the T7 stops the stream
+        # (LJME_NO_RESPONSE_BYTES_RECEIVED), so every call is serialised
+        # there. Not on Ethernet: the lock would make the heartbeat and abort
+        # wait for a whole stream block, and a stalled read would hold them.
+        # `_io` is captured by each `with`, so open() can swap it safely.
+        self._lock = threading.RLock()
+        self._io: contextlib.AbstractContextManager = contextlib.nullcontext()
 
     def open(self) -> None:
         from labjack import ljm  # deferred: needs LJM shared library
 
-        self._ljm = ljm
-        self._handle = ljm.openS("T7", self._connection, self._identifier)
+        with self._lock:
+            self._ljm = ljm
+            self._handle = ljm.openS("T7", self._connection, self._identifier)
+            try:
+                usb = ljm.getHandleInfo(self._handle)[1] == ljm.constants.ctUSB
+            except Exception:
+                usb = True  # unknown transport: serialise, the safe side
+            self._io = self._lock if usb else contextlib.nullcontext()
 
     def close(self) -> None:
-        if self._handle is not None:
-            try:
-                self._ljm.close(self._handle)
-            finally:
-                self._handle = None
+        with self._lock:
+            if self._handle is not None:
+                try:
+                    self._ljm.close(self._handle)
+                finally:
+                    self._handle = None
 
     @property
     def connected(self) -> bool:
         return self._handle is not None
+
+    @property
+    def serialised(self) -> bool:
+        """True when calls are serialised (USB)."""
+        return self._io is self._lock
 
     def _h(self) -> int:
         if self._handle is None:
@@ -110,33 +131,41 @@ class LjmDevice:
         return self._handle
 
     def read_name(self, name: str) -> float:
-        return self._ljm.eReadName(self._h(), name)
+        with self._io:
+            return self._ljm.eReadName(self._h(), name)
 
     def read_names(self, names: list[str]) -> list[float]:
-        return list(self._ljm.eReadNames(self._h(), len(names), names))
+        with self._io:
+            return list(self._ljm.eReadNames(self._h(), len(names), names))
 
     def write_name(self, name: str, value: float) -> None:
-        self._ljm.eWriteName(self._h(), name, value)
+        with self._io:
+            self._ljm.eWriteName(self._h(), name, value)
 
     def write_names(self, names: list[str], values: list[float]) -> None:
-        self._ljm.eWriteNames(self._h(), len(names), names, values)
+        with self._io:
+            self._ljm.eWriteNames(self._h(), len(names), names, values)
 
     def write_name_array(self, name: str, values: list[int]) -> None:
-        self._ljm.eWriteNameArray(self._h(), name, len(values), values)
+        with self._io:
+            self._ljm.eWriteNameArray(self._h(), name, len(values), values)
 
     def write_name_bytes(self, name: str, data: bytes) -> None:
         # LUA_SOURCE_WRITE (and other buffer regs) require the ByteArray API;
         # eWriteNameArray writes float register values and corrupts the payload.
-        self._ljm.eWriteNameByteArray(self._h(), name, len(data), data)
+        with self._io:
+            self._ljm.eWriteNameByteArray(self._h(), name, len(data), data)
 
     def read_name_bytes(self, name: str, num_bytes: int) -> bytes:
         if num_bytes <= 0:
             return b""
-        raw = self._ljm.eReadNameByteArray(self._h(), name, num_bytes)
+        with self._io:
+            raw = self._ljm.eReadNameByteArray(self._h(), name, num_bytes)
         return bytes(raw)
 
     def write_address_u32(self, address: int, value: int) -> None:
-        self._ljm.eWriteAddress(self._h(), address, self._ljm.constants.UINT32, value)
+        with self._io:
+            self._ljm.eWriteAddress(self._h(), address, self._ljm.constants.UINT32, value)
 
     def reboot(self, delay_ticks: int = 40) -> None:
         """Soft-reboot the T7 (SYSTEM_REBOOT = 0x4C4Axxxx) and reopen.
@@ -168,23 +197,27 @@ class LjmDevice:
     def stream_start(
         self, scan_names: list[str], scan_rate_hz: float, scans_per_read: int
     ) -> float:
-        addrs = self._ljm.namesToAddresses(len(scan_names), scan_names)[0]
-        self._scan_names = list(scan_names)
-        self._scans_per_read = scans_per_read
-        # Keep the stream buffer small so it fits beside the Lua sequencer in
-        # the T7's 64KB shared heap. 4096+ triggers SYSTEM_MEMORY_BEREFT with
-        # the dense sequencer; 2048 is the practical ceiling on USB.
-        with contextlib.suppress(Exception):
-            self._ljm.eWriteName(self._h(), "STREAM_BUFFER_SIZE_BYTES", 2048)
-        actual = self._ljm.eStreamStart(self._h(), scans_per_read, len(addrs), addrs, scan_rate_hz)
-        return float(actual)
+        with self._io:
+            addrs = self._ljm.namesToAddresses(len(scan_names), scan_names)[0]
+            self._scan_names = list(scan_names)
+            self._scans_per_read = scans_per_read
+            # Keep the stream buffer small so it fits beside the Lua sequencer in
+            # the T7's 64KB shared heap. 4096+ triggers SYSTEM_MEMORY_BEREFT with
+            # the dense sequencer; 2048 is the practical ceiling on USB.
+            with contextlib.suppress(Exception):
+                self._ljm.eWriteName(self._h(), "STREAM_BUFFER_SIZE_BYTES", 2048)
+            actual = self._ljm.eStreamStart(
+                self._h(), scans_per_read, len(addrs), addrs, scan_rate_hz
+            )
+            return float(actual)
 
     def stream_read(self) -> tuple[np.ndarray, int]:
-        raw, device_backlog, _ljm_backlog = self._ljm.eStreamRead(self._h())
-        n_ch = len(self._scan_names)
-        data = np.asarray(raw, dtype=np.float64).reshape(-1, n_ch)
-        return data, int(device_backlog)
+        with self._io:
+            raw, device_backlog, _ljm_backlog = self._ljm.eStreamRead(self._h())
+            n_ch = len(self._scan_names)
+            data = np.asarray(raw, dtype=np.float64).reshape(-1, n_ch)
+            return data, int(device_backlog)
 
     def stream_stop(self) -> None:
-        with contextlib.suppress(Exception):
+        with self._io, contextlib.suppress(Exception):
             self._ljm.eStreamStop(self._h())

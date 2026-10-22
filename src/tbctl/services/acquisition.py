@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 CJC_POLL_S = 1.0  # cold-junction temperature refresh interval
 STREAM_READS_HZ = 40  # stream block rate (scans_per_read = scan rate / this)
+RESTART_MAX_DELAY_S = 5.0  # back-off cap between stream restart attempts
 # Streamed DIO image covering DIO 0-15, i.e. every possible sequencer output
 # (FIO0-7 + EIO0-7). Read-only and does not change line direction.
 DIO_SCAN_NAME = "FIO_EIO_STATE"
@@ -154,8 +155,11 @@ class AcquisitionService:
         self._iface = iface
         self._task: asyncio.Task | None = None
         self._stream_epoch = 0.0
+        self._epoch_sample = 0  # _samples_in at _stream_epoch (moves on restart)
         self._samples_in = 0
         self.dropped_scans = 0
+        # called with (gap_start, gap_end) epoch seconds after a stream restart
+        self.on_stream_restart: Callable[[float, float], None] | None = None
         self._capacity_s = capacity_s
         # listeners get (group_name, t_epoch, eu_block) after every ingest;
         # survive reconfigure() so the recorder hook stays attached
@@ -255,14 +259,15 @@ class AcquisitionService:
             names, values = zip(*settings, strict=True)
             await asyncio.to_thread(self._iface.write_names, list(names), list(values))
         # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
-        scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
+        self._scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
         actual = await asyncio.to_thread(
-            self._iface.stream_start, self._scan_names, self.scan_rate_hz, scans_per_read
+            self._iface.stream_start, self._scan_names, self.scan_rate_hz, self._scans_per_read
         )
         if abs(actual - self.scan_rate_hz) / self.scan_rate_hz > 0.01:
             log.warning("device stream rate %.1f != requested %.1f", actual, self.scan_rate_hz)
         self.scan_rate_hz = actual
         self._stream_epoch = time.time()
+        self._epoch_sample = 0
         self._samples_in = 0
         self._task = asyncio.create_task(self._run(), name="acquisition")
 
@@ -279,18 +284,59 @@ class AcquisitionService:
         return self._task is not None and not self._task.done()
 
     async def _run(self) -> None:
+        failures = 0
         while True:
             try:
                 block, backlog = await asyncio.to_thread(self._iface.stream_read)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("stream read failed; retrying in 1 s")
-                await asyncio.sleep(1.0)
+                # a stopped stream does not come back by itself: restart it,
+                # backing off (1, 2, 4, 5, 5... s) while the T7 is unreachable
+                failures += 1
+                if failures == 1:
+                    log.exception("stream read failed; restarting stream")
+                await asyncio.sleep(min(RESTART_MAX_DELAY_S, 2.0 ** (failures - 1)))
+                if await self._restart_stream():
+                    failures = 0
                 continue
             if backlog > self.scan_rate_hz:  # >1 s behind
                 log.warning("stream backlog %d scans", backlog)
+            await self._poll_cold_junction()
             self._ingest(block)
+
+    async def _restart_stream(self) -> bool:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(self._iface.stream_stop)
+        try:
+            actual = await asyncio.to_thread(
+                self._iface.stream_start, self._scan_names, self.scan_rate_hz, self._scans_per_read
+            )
+        except Exception as e:
+            log.warning("stream restart failed: %s", e)
+            return False
+        # Sample times count from the stream start, so re-anchor them: the
+        # scans lost in between become a visible gap instead of shifting every
+        # later sample back. Never before the last kept sample (rings and
+        # recordings need increasing time).
+        gap_start = self._stream_epoch + (self._samples_in - self._epoch_sample) / self.scan_rate_hz
+        self.scan_rate_hz = actual
+        self._stream_epoch = max(time.time(), gap_start)
+        self._epoch_sample = self._samples_in
+        log.warning("stream restarted; no data for %.2f s", self._stream_epoch - gap_start)
+        if self.on_stream_restart:
+            with contextlib.suppress(Exception):
+                self.on_stream_restart(gap_start, self._stream_epoch)
+        return True
+
+    async def _poll_cold_junction(self) -> None:
+        # off the event loop: on USB a device read waits for the stream read
+        now = time.time()
+        if now - self._cj_read_at > CJC_POLL_S:
+            self._cj_read_at = now
+            with contextlib.suppress(Exception):
+                k = await asyncio.to_thread(self._iface.read_name, "TEMPERATURE_DEVICE_K")
+                self._cj_degc = k - 273.15
 
     # -- data path ---------------------------------------------------------
 
@@ -298,13 +344,8 @@ class AcquisitionService:
         n = len(volts)
         if n == 0:
             return
-        now = time.time()
-        if now - self._cj_read_at > CJC_POLL_S:
-            self._cj_read_at = now
-            with contextlib.suppress(Exception):
-                self._cj_degc = self._iface.read_name("TEMPERATURE_DEVICE_K") - 273.15
         idx = self._samples_in + np.arange(n)
-        t = self._stream_epoch + idx / self.scan_rate_hz
+        t = self._stream_epoch + (idx - self._epoch_sample) / self.scan_rate_hz
         n_in = len(self._converters)
         eu = np.empty((n, n_in), dtype=np.float64)
         for j, conv in enumerate(self._converters):
