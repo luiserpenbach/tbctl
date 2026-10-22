@@ -93,11 +93,17 @@ valve power off, 50 Hz stream, Windows laptop; branch `fix/hw-checkout-usb`):
   `stream restarted after 9.1 s`, records a `stream_restart` event and a
   9.1 s gap at the right wall-clock time, and re-applies AIN range /
   negative_ch (before the fix: no gap, samples stamped 9.35 s early, ±10 V).
-- **Test 5 (power cycle) FAILS on this T7, twice:** after the pull,
-  `LUA_RUN_DEFAULT=1` but `LUA_SOURCE_SIZE=0` and `interp_version` 0. No
-  script runs from flash, even right after a `tbctl deploy-lua` that
-  reported the flash save OK. The node now logs an error and a
-  `lua_not_running` event; the cause is not found yet.
+- **Test 5 (power cycle) failed twice, now fixed:** after the pull,
+  `LUA_RUN_DEFAULT=1` but `LUA_SOURCE_SIZE=0` and `interp_version` 0, even
+  right after a `tbctl deploy-lua` that reported the flash save OK. Cause:
+  `deploy_script` wrote `LUA_SAVE_TO_FLASH` after `LUA_RUN`, but the save
+  copies the *loaded source buffer*, which the compile consumes. Flash held a
+  4-byte script (`LUA_LOAD_SAVED` → `LUA_SOURCE_SIZE`). The deploy now saves
+  with the script stopped right after the upload (Kipling's order), loads the
+  flash copy back, checks its size (fw 1.0332 reads back payload + 8) and
+  runs that copy. Verified: deploy, ~5 s USB pull, `tbctl probe` →
+  `interp_version 1`. The node still logs `lua_not_running` if it recurs.
+  Power-cycle while ARMED with outputs on a logic analyser is still open (below).
 - Thermocouples: the cold junction is now the streamed AIN14 sensor
   (`TEMPERATURE_DEVICE_K` is refused while streaming, so CJC was stuck at
   25 °C); it matches `TEMPERATURE_DEVICE_K` within 0.001 K. Open/saturated
@@ -114,7 +120,8 @@ valve power off, 50 Hz stream, Windows laptop; branch `fix/hw-checkout-usb`):
 - [ ] Test 4: Lua killed → hardware watchdog puts the outputs at safe_word.
       It **FAILED** last time; the startup-delay fix is unconfirmed.
 - [ ] Test 5: power-cycle while ARMED (never run). Outputs must be fail-safe
-      at boot, and `sequencer.lua` must autostart to IDLE.
+      at boot, and `sequencer.lua` must autostart to IDLE (autostart after a
+      USB pull verified 2026-10-22, not while ARMED).
 - [ ] §10.4 soak: 8 h with zero sample loss (`tbctl soak`). It never finished.
 - [ ] **New since then:** valve/igniter states are now streamed
       (`FIO_EIO_STATE` in the scan list). Check that LJM accepts it in
