@@ -25,6 +25,14 @@ Aldenhoven stand and the H2 lander) and point `--config-dir` (systemd unit,
 No gateway required on the bench LAN. **No auth in v1 (D6) — this network
 must be an isolated bench LAN, never a shared office network.**
 
+**Optional Wi-Fi uplink** (updates, remote help, see "Remote help with Claude
+Code" below): the Pi may join an internet Wi-Fi as a second interface. The
+node only listens on `127.0.0.1` and its bench address (`--host` in
+`deploy/tbctl-node.service`), so the dashboard and valve control stay on the
+bench LAN. Leave the Ethernet connection without a gateway so internet
+traffic goes out over Wi-Fi. If the node gets a different bench IP, change
+the second `--host` to match.
+
 ## 1. OS (5 min)
 
 Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager; preconfigure
@@ -110,6 +118,32 @@ curl -s localhost:8000/api/status | python3 -m json.tool | head
 
 Open `http://192.168.10.10:8000` from the laptop — dashboard should show
 live data and a green T7 chip.
+
+## Remote help with Claude Code (optional)
+
+To let Claude Code work on the node (logs, configs, `tbctl` commands,
+fixes) from the Claude Code app:
+
+```bash
+# Wi-Fi uplink with internet, next to the wired bench LAN
+sudo nmcli dev wifi connect "<ssid>" password "<password>"
+ip -br addr        # eth0 192.168.10.10, wlan0 with its own address
+ss -ltn | grep 8000   # expect 127.0.0.1:8000 and 192.168.10.10:8000 only
+
+# Claude Code, run as the tbctl user from the repo
+curl -fsSL https://claude.ai/install.sh | bash
+cd /opt/tbctl && claude remote-control
+```
+
+The session then shows up in the Claude Code app. It follows the
+hardware rules in `AGENTS.md` ("On the bench node"): it reads freely but
+asks the operator before anything that changes the T7, the valves, the
+running node or the network. Stop it (Ctrl-C) and take the Wi-Fi down
+(`sudo nmcli radio wifi off`) before pressurised tests if your test
+procedure wants the cabinet offline.
+
+Alternative without internet on the Pi: run `claude remote-control` on the
+mission control laptop and let it reach the Pi over SSH.
 
 ## Simulator / training mode (--sim parity)
 
