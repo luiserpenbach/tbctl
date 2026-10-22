@@ -74,6 +74,7 @@ class WsHub:
                 REG_NAME["ELAPSED_MS"],
                 REG_NAME["STEP_COUNT"],
                 REG_NAME["CRC16"],
+                "DIO_STATE",
             ]
         )
         return {
@@ -85,7 +86,7 @@ class WsHub:
             "elapsed_ms": int(regs[3]),
             "step_count": int(regs[4]),
             "crc16": int(regs[5]),
-            "dio_state": int(iface.read_name("DIO_STATE")),
+            "dio_state": int(regs[6]),
         }
 
     async def _emit_loop(self) -> None:
@@ -102,7 +103,8 @@ class WsHub:
                     log.exception("sequencer terminal watch failed")
                 if self._clients:
                     try:
-                        seq_status = self._seq_status()
+                        # in a thread: on USB a device read waits for the stream read
+                        seq_status = await asyncio.to_thread(self._seq_status)
                     except Exception:
                         log.exception("seq status read failed")
             if not self._clients:

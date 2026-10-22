@@ -87,20 +87,29 @@ class LjmDevice:
         self._ljm = None
         self._scan_names: list[str] = []
         self._scans_per_read = 0
-        # LJM is not safe to call concurrently on one handle. Stream reads and
-        # command-response (status, cold-junction) otherwise collide on USB and
-        # the T7 stops the stream (LJME_NO_RESPONSE_BYTES_RECEIVED).
-        self._io = threading.RLock()
+        # On USB, stream reads and command-response (status, cold-junction)
+        # from different threads collide and the T7 stops the stream
+        # (LJME_NO_RESPONSE_BYTES_RECEIVED), so every call is serialised
+        # there. Not on Ethernet: the lock would make the heartbeat and abort
+        # wait for a whole stream block, and a stalled read would hold them.
+        # `_io` is captured by each `with`, so open() can swap it safely.
+        self._lock = threading.RLock()
+        self._io: contextlib.AbstractContextManager = contextlib.nullcontext()
 
     def open(self) -> None:
         from labjack import ljm  # deferred: needs LJM shared library
 
-        with self._io:
+        with self._lock:
             self._ljm = ljm
             self._handle = ljm.openS("T7", self._connection, self._identifier)
+            try:
+                usb = ljm.getHandleInfo(self._handle)[1] == ljm.constants.ctUSB
+            except Exception:
+                usb = True  # unknown transport: serialise, the safe side
+            self._io = self._lock if usb else contextlib.nullcontext()
 
     def close(self) -> None:
-        with self._io:
+        with self._lock:
             if self._handle is not None:
                 try:
                     self._ljm.close(self._handle)
@@ -110,6 +119,11 @@ class LjmDevice:
     @property
     def connected(self) -> bool:
         return self._handle is not None
+
+    @property
+    def serialised(self) -> bool:
+        """True when calls are serialised (USB)."""
+        return self._io is self._lock
 
     def _h(self) -> int:
         if self._handle is None:

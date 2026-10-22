@@ -88,6 +88,9 @@ def build_context(
     events = EventLog(log_dir or Path("logs"))
     recorder = Recorder(chmap, bundle.channels.sha256, acq, data_dir, _git_hash())
     events.add_sink(recorder.on_event)
+    acq.on_stream_restart = lambda t0, t1: events.log(
+        "stream_restart", gap_start=t0, gap_end=t1, gap_s=round(t1 - t0, 3)
+    )
     sequencer = SequencerService(bundle, iface, acq, events)
     manual = ManualControl(chmap, iface, events)
     device_mgr = DeviceManager(
