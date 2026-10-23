@@ -305,6 +305,8 @@ export function ChannelsEditor() {
   const [dirty, setDirty] = useState(false);
   const [editing, setEditing] = useState<Chan | null>(null);
   const [raws, setRaws] = useState<Record<string, number>>({});
+  // node-side engineering value; null when it cannot be converted (open TC)
+  const [values, setValues] = useState<Record<string, number | null>>({});
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
@@ -317,8 +319,13 @@ export function ChannelsEditor() {
         .then((r) => r.json())
         .then((d) => {
           const m: Record<string, number> = {};
-          for (const row of d.channels) if (row.raw !== null) m[row.tag] = row.raw;
+          const v: Record<string, number | null> = {};
+          for (const row of d.channels) {
+            if (row.raw !== null) m[row.tag] = row.raw;
+            v[row.tag] = row.value;
+          }
           setRaws(m);
+          setValues(v);
         })
         .catch(() => {});
     }, 700);
@@ -395,7 +402,16 @@ export function ChannelsEditor() {
                     : "—"}
               </td>
               <td className="val">
-                {raws[c.tag] !== undefined ? `${evalCal(c.cal, raws[c.tag]).toFixed(2)}` : "—"}
+                {c.kind === "thermocouple_k"
+                  ? // no cal to preview: the node converts (cold junction, Type-K)
+                    typeof values[c.tag] === "number"
+                    ? (values[c.tag] as number).toFixed(2)
+                    : raws[c.tag] !== undefined
+                      ? "out of range"
+                      : "—"
+                  : raws[c.tag] !== undefined
+                    ? `${evalCal(c.cal, raws[c.tag]).toFixed(2)}`
+                    : "—"}
               </td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button className="panel-btn" onClick={() => setEditing(c)}>⚙</button>
