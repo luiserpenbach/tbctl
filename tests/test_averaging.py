@@ -119,3 +119,74 @@ async def test_averaging_cuts_noise_in_the_simulator():
     assert len(v) >= 40
     # 20-scan mean of white noise: sigma / sqrt(20) ~ 0.22
     assert np.std(v[:, 0]) < 0.4 < 0.7 < np.std(v[:, 1])
+
+
+def test_rate_candidates_for_fallback():
+    m = _chmap(_ain("p.a", "AIN0", average=True))
+    assert m.stream_rate_candidates() == [1000, 500, 250, 200, 100]
+    assert _chmap(_ain("p.a", "AIN0")).stream_rate_candidates() == [50]  # no averaging: no fallback
+    groups = {"default": {"rate_hz": 50}, "fast": {"rate_hz": 200}}
+    m = _chmap(
+        _ain("p.a", "AIN0", average=True), _ain("p.b", "AIN1", rate_group="fast"), groups=groups
+    )
+    assert m.stream_rate_candidates() == [1000, 200]  # 200 Hz must divide the stream rate
+
+
+async def test_falls_back_to_the_fastest_rate_the_device_accepts(caplog):
+    chmap = _chmap(_ain("p.avg", "AIN0", average=True), _ain("p.raw", "AIN1"))
+    dev = MockDevice(chmap)
+    dev.max_stream_hz = 150  # like the bench T7 with three +-0.1 V inputs (only 100 Hz works)
+    dev.open()
+    acq = AcquisitionService(chmap, dev)
+    with caplog.at_level("INFO"):
+        await acq.start()
+    try:
+        assert acq.scan_rate_hz == 100 and acq._group_decim["default"] == 2
+        assert "cannot scan the list at 1000 Hz" in caplog.text
+        assert "stream at 100 Hz; averaged channels use default: 2 scans per sample" in caplog.text
+        await asyncio.sleep(0.5)
+        t, _ = acq.rings["default"].window(-1.0)
+        assert len(t) >= 15 and np.allclose(np.diff(t), 0.02, atol=1e-5)  # still 50 Hz samples
+    finally:
+        await acq.stop()
+
+
+async def test_restart_resumes_at_the_rate_that_worked(monkeypatch):
+    from tbctl.services import acquisition
+
+    monkeypatch.setattr(acquisition, "RESTART_MAX_DELAY_S", 0.05)
+    chmap = _chmap(_ain("p.avg", "AIN0", average=True))
+
+    class Pullable(MockDevice):
+        max_stream_hz = 300
+        unplugged = False
+
+        def __init__(self, chmap):
+            super().__init__(chmap)
+            self.started: list[float] = []
+
+        def stream_start(self, names, rate, spr):
+            self.started.append(rate)
+            self.unplugged = False
+            return super().stream_start(names, rate, spr)
+
+        def stream_read(self):
+            if self.unplugged:
+                raise RuntimeError("LJME_NO_RESPONSE_BYTES_RECEIVED")
+            return super().stream_read()
+
+    dev = Pullable(chmap)
+    dev.open()
+    acq = AcquisitionService(chmap, dev)
+    await acq.start()
+    try:
+        assert dev.started == [1000, 500, 250]
+        dev.unplugged = True
+        for _ in range(100):  # <= 2 s for the restart
+            if len(dev.started) > 3 and acq.stream_ok:
+                break
+            await asyncio.sleep(0.02)
+        assert dev.started == [1000, 500, 250, 250]  # no second probe from 1 kHz
+        assert acq.scan_rate_hz == 250
+    finally:
+        await acq.stop()

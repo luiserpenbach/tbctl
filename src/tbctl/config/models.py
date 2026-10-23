@@ -42,9 +42,12 @@ MAX_OUTPUT_BITS = 16
 AIN_RANGES = (10.0, 1.0, 0.1, 0.01)
 SINGLE_ENDED = 199
 # A channel with `average: true` records the mean of all stream scans in each
-# of its sample periods; the stream then runs at least this fast. At 50 Hz
-# that is 20 scans = one 50 Hz mains period, so hum and its harmonics cancel.
-AVERAGE_STREAM_HZ = 1000.0
+# of its sample periods; the stream then runs at the first of these rates the
+# T7 accepts for the scan list (each +-0.1 V input needs long settling: three
+# of them already rule out 200 Hz). Any of them spaces its scans evenly over a
+# 20 ms period, so at 50 Hz mains hum cancels; noise drops ~sqrt(scans).
+AVERAGE_STREAM_RATES_HZ = (1000.0, 500.0, 250.0, 200.0, 100.0)
+AVERAGE_STREAM_HZ = AVERAGE_STREAM_RATES_HZ[0]
 
 
 def ain_number(hw: str) -> int:
@@ -387,6 +390,26 @@ class ChannelMap(StrictModel):
         if any(c.average for c in inputs):
             return max(fastest, AVERAGE_STREAM_HZ)
         return fastest
+
+    def stream_rate_candidates(self) -> list[float]:
+        """Stream rates to try, fastest first. Without averaging only the one
+        rate; with it, also every slower AVERAGE_STREAM_RATES_HZ that all input
+        groups divide and that still gives averaged channels >= 2 scans."""
+        preferred = self.stream_rate_hz()
+        inputs = self.inputs()
+        averaged = [self.rate_groups[c.rate_group].rate_hz for c in inputs if c.average]
+        if not averaged:
+            return [preferred]
+        groups = {self.rate_groups[c.rate_group].rate_hz for c in inputs}
+        slower = [
+            r
+            for r in AVERAGE_STREAM_RATES_HZ
+            if r < preferred
+            and r >= 2 * max(averaged)
+            and r >= max(groups)
+            and all(abs(r / g - round(r / g)) < 1e-9 for g in groups)
+        ]
+        return [preferred, *slower]
 
     def ain_settings(self) -> list[tuple[str, float]]:
         """(register, value) pairs configuring every scanned AIN: range and

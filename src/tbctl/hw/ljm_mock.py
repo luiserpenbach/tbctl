@@ -44,6 +44,7 @@ from tbctl.config.models import (
     dio_number,
 )
 from tbctl.crc import crc16_ccitt_false
+from tbctl.hw.ljm_iface import StreamRateError
 from tbctl.hw.registers_gen import (
     ARM_MAGIC,
     DEFAULT_HB_TIMEOUT_MS,
@@ -598,10 +599,16 @@ class MockDevice:
         self._stream_idx = 0
         return self._scan_rate
 
+    # fastest scan rate this "device" completes the scan list at (None: any);
+    # above it reads fail like a T7 with slow-settling inputs
+    max_stream_hz: float | None = None
+
     def stream_read(self) -> tuple[np.ndarray, int]:
         """Blocking, like eStreamRead: waits until scans_per_read scans exist."""
         if not self._scan_names:
             raise RuntimeError("stream not started")
+        if self.max_stream_hz is not None and self._scan_rate > self.max_stream_hz:
+            raise StreamRateError("2942 STREAM_SCAN_OVERLAP (simulated)")
         n = self._scans_per_read
         target = (self._stream_idx + n) / self._scan_rate
         wait = self._stream_t0 + target - self._clock()

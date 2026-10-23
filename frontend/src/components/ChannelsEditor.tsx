@@ -217,7 +217,7 @@ function ChannelForm({
         {(isAnalog || c.kind === "thermocouple_k") && (
           <div
             className="modal-row"
-            title="record the mean of every stream scan in each sample period; the stream then runs at ≥1 kHz. At 50 Hz this cancels 50 Hz mains hum and cuts noise ~4–5×, at ~half a period (10 ms) of extra lag"
+            title="record the mean of every stream scan in each sample period; the stream then runs at the fastest of 1000/500/250/200/100 Hz the T7 accepts (±0.1 V inputs settle slowly). At 50 Hz this cancels 50 Hz mains hum and cuts noise by ~√(scans per sample), at ~half a period (10 ms) of extra lag"
           >
             <span style={{ width: 70 }}>average</span>
             <label style={{ display: "flex", gap: 5, alignItems: "center", textTransform: "none", letterSpacing: 0 }}>
@@ -226,7 +226,7 @@ function ChannelForm({
                 checked={c.average ?? false}
                 onChange={(e) => upd({ average: e.target.checked })}
               />
-              mean over each sample period (stream ≥ 1 kHz)
+              mean over each sample period (stream up to 1 kHz)
             </label>
           </div>
         )}

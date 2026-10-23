@@ -12,9 +12,11 @@
 # start. Thermocouples default to +-0.1 V.
 #
 # `average: true` (inputs, default false) records the mean of every stream
-# scan in each sample period instead of one scan; the stream then runs at
-# >= 1 kHz. At 50 Hz that is one mains period: hum cancels and noise drops
-# ~4-5x, for ~10 ms extra lag. Every input rate group must divide 1000 Hz.
+# scan in each sample period instead of one scan; the stream then runs at the
+# fastest of 1000/500/250/200/100 Hz the T7 accepts (each +-0.1 V input needs
+# long settling: three of them leave only 100 Hz). At 50 Hz every rate spans
+# one mains period, so hum cancels; noise drops ~sqrt(scans per sample), ~4.5x
+# at 1 kHz, for ~10 ms extra lag. Every input rate group must divide 1000 Hz.
 device:
   ip: 192.168.10.20
   connection: ethernet   # "usb" for laptop bench testing (ip then ignored)

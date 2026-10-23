@@ -1,9 +1,10 @@
 """Acquisition: stream config, EU conversion, ring buffers (spec §3).
 
-One T7 stream runs at the fastest rate any configured channel needs (at least
-AVERAGE_STREAM_HZ when a channel averages); slower rate groups are decimated
-by an integer factor into their own ring buffers, either keeping one scan per
-sample period or, for `average: true` channels, the mean of all of them.
+One T7 stream runs at the fastest rate any configured channel needs (when a
+channel averages: the first of AVERAGE_STREAM_RATES_HZ the T7 accepts); slower
+rate groups are decimated by an integer factor into their own ring buffers,
+either keeping one scan per sample period or, for `average: true` channels,
+the mean of all of them.
 v1 ships with everything at 50 Hz, but the rate-group mechanism already
 carries a future 1 kHz group (D4).
 """
@@ -28,7 +29,7 @@ from tbctl.config.models import (
     TableCal,
     ThermocoupleChannel,
 )
-from tbctl.hw.ljm_iface import DeviceInterface
+from tbctl.hw.ljm_iface import DeviceError, DeviceInterface, StreamRateError
 from tbctl.services.thermocouple import (
     T7_TEMP_SENSOR_AIN,
     compensated_temp_degc,
@@ -187,7 +188,10 @@ class AcquisitionService:
         self._scan_channels = inputs  # scan list order == channel order
         self._scan_names = [c.hw for c in inputs]
         self._converters = [_make_converter(c) for c in inputs]
-        self.scan_rate_hz = chmap.stream_rate_hz()
+        # fastest first; more than one only when a channel averages
+        self._stream_rates = chmap.stream_rate_candidates()
+        self._rate_idx = 0
+        self.scan_rate_hz = self._stream_rates[0]
         # outputs: one extra scan entry (the DIO word), split into a 0/1
         # "open/on" column per output, recorded in the fastest input group
         self._outputs = chmap.outputs() if chmap.device.record_outputs and inputs else []
@@ -227,6 +231,7 @@ class AcquisitionService:
         # of the scans since the last completed window (carried across reads)
         self._group_avg: dict[str, list[int]] = {}
         self._avg_carry: dict[str, np.ndarray] = {}
+        self._group_rate: dict[str, float] = {}
         for group, rg in chmap.rate_groups.items():
             tags = [c.tag for c in inputs if c.rate_group == group]
             otags = [c.tag for c in self._outputs] if group == output_group else []
@@ -245,6 +250,7 @@ class AcquisitionService:
                     f"{self.scan_rate_hz} Hz"
                 )
             self._group_decim[group] = round(factor)
+            self._group_rate[group] = rg.rate_hz
             self._group_cols[group] = [self._scan_names.index(chmap.by_tag(t).hw) for t in tags]
             self._group_phys[group] = {t: k for k, t in enumerate(tags)}
             self._group_avg[group] = [k for k, t in enumerate(tags) if chmap.by_tag(t).average]
@@ -289,21 +295,60 @@ class AcquisitionService:
         self.stream_ok, self.stream_error = True, None
         self._task = asyncio.create_task(self._run(), name="acquisition")
 
-    async def _start_stream(self) -> None:
+    async def _start_stream(self, first: int = 0) -> None:
+        """Start the stream at the first rate from `_stream_rates[first:]` the
+        device accepts (a restart resumes from the rate that worked)."""
         # per-channel range + single-ended/differential, before the stream
         # starts (stream mode honours both); the T7 defaults are +-10 V vs GND,
         # and a power-cycled T7 is back at those defaults after a restart
         if settings := self._chmap.ain_settings():
             names, values = zip(*settings, strict=True)
             await asyncio.to_thread(self._iface.write_names, list(names), list(values))
-        # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
-        self._scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
-        actual = await asyncio.to_thread(
-            self._iface.stream_start, self._scan_names, self.scan_rate_hz, self._scans_per_read
-        )
-        if abs(actual - self.scan_rate_hz) / self.scan_rate_hz > 0.01:
-            log.warning("device stream rate %.1f != requested %.1f", actual, self.scan_rate_hz)
+        rates = self._stream_rates
+        for i in range(first, len(rates)):
+            rate = rates[i]
+            # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
+            self._scans_per_read = max(1, round(rate / STREAM_READS_HZ))
+            actual = await asyncio.to_thread(
+                self._iface.stream_start, self._scan_names, rate, self._scans_per_read
+            )
+            if len(rates) == 1:
+                break
+            try:
+                await self._first_block()
+                break
+            except StreamRateError as e:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(self._iface.stream_stop)
+                if i == len(rates) - 1:
+                    raise
+                log.warning(
+                    "device cannot scan the list at %g Hz (%s); trying %g Hz", rate, e, rates[i + 1]
+                )
+        if abs(actual - rate) / rate > 0.01:
+            log.warning("device stream rate %.1f != requested %.1f", actual, rate)
+        self._rate_idx = i
+        for group, group_rate in self._group_rate.items():
+            self._group_decim[group] = round(rate / group_rate)
         self.scan_rate_hz = actual
+        if len(rates) > 1:
+            log.info(
+                "stream at %g Hz; averaged channels use %s scans per sample",
+                rate,
+                ", ".join(f"{g}: {self._group_decim[g]}" for g, a in self._group_avg.items() if a),
+            )
+
+    async def _first_block(self, timeout_s: float = 1.0) -> None:
+        """Wait for the first stream data: the T7 reports a scan list it cannot
+        complete in one period (STREAM_SCAN_OVERLAP) there, not at start. The
+        block is dropped; sample times start once the stream is confirmed."""
+        t_end = time.monotonic() + timeout_s
+        while time.monotonic() < t_end:
+            block, _ = await asyncio.to_thread(self._iface.stream_read)
+            if len(block):
+                return
+            await asyncio.sleep(STREAM_POLL_S)
+        raise DeviceError(f"no stream data within {timeout_s:g} s")
 
     async def stop(self) -> None:
         if self._task:
@@ -358,7 +403,7 @@ class AcquisitionService:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(self._iface.stream_stop)
             try:
-                await self._start_stream()
+                await self._start_stream(self._rate_idx)
                 break
             except Exception as e:
                 log.debug("stream restart attempt %d failed: %s", attempts, e)
