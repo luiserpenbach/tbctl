@@ -23,6 +23,15 @@ class DeviceError(Exception):
     """Device communication failure."""
 
 
+class StreamRateError(DeviceError):
+    """The device cannot complete one scan of the list within a scan period."""
+
+
+# T7 device error (not an LJM library code): reported by the first stream
+# reads when the scan list takes longer than 1 / scan rate
+STREAM_SCAN_OVERLAP = 2942
+
+
 class DeviceInterface(Protocol):
     def open(self) -> None: ...
 
@@ -227,6 +236,8 @@ class LjmDevice:
             except self._ljm.LJMError as e:
                 if e.errorCode == self._ljm.errorcodes.NO_SCANS_RETURNED:
                     return np.empty((0, n_ch), dtype=np.float64), 0
+                if e.errorCode == STREAM_SCAN_OVERLAP:
+                    raise StreamRateError(str(e)) from e
                 raise
             data = np.asarray(raw, dtype=np.float64).reshape(-1, n_ch)
             return data, int(device_backlog)

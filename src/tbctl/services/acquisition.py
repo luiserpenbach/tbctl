@@ -1,7 +1,10 @@
 """Acquisition: stream config, EU conversion, ring buffers (spec §3).
 
-One T7 stream runs at the fastest rate any configured channel needs; slower
-rate groups are decimated by an integer factor into their own ring buffers.
+One T7 stream runs at the fastest rate any configured channel needs (when a
+channel averages: the first of AVERAGE_STREAM_RATES_HZ the T7 accepts); slower
+rate groups are decimated by an integer factor into their own ring buffers,
+either keeping one scan per sample period or, for `average: true` channels,
+the mean of all of them.
 v1 ships with everything at 50 Hz, but the rate-group mechanism already
 carries a future 1 kHz group (D4).
 """
@@ -26,7 +29,7 @@ from tbctl.config.models import (
     TableCal,
     ThermocoupleChannel,
 )
-from tbctl.hw.ljm_iface import DeviceInterface
+from tbctl.hw.ljm_iface import DeviceError, DeviceInterface, StreamRateError
 from tbctl.services.thermocouple import (
     T7_TEMP_SENSOR_AIN,
     compensated_temp_degc,
@@ -185,9 +188,10 @@ class AcquisitionService:
         self._scan_channels = inputs  # scan list order == channel order
         self._scan_names = [c.hw for c in inputs]
         self._converters = [_make_converter(c) for c in inputs]
-        self.scan_rate_hz = max(
-            (chmap.rate_groups[c.rate_group].rate_hz for c in inputs), default=50.0
-        )
+        # fastest first; more than one only when a channel averages
+        self._stream_rates = chmap.stream_rate_candidates()
+        self._rate_idx = 0
+        self.scan_rate_hz = self._stream_rates[0]
         # outputs: one extra scan entry (the DIO word), split into a 0/1
         # "open/on" column per output, recorded in the fastest input group
         self._outputs = chmap.outputs() if chmap.device.record_outputs and inputs else []
@@ -223,6 +227,11 @@ class AcquisitionService:
         self._group_cols: dict[str, list[int]] = {}
         self._group_decim: dict[str, int] = {}
         self._group_phys: dict[str, dict[str, int]] = {}  # tag -> col within group block
+        # averaged channels: positions within the group block, and the volts
+        # of the scans since the last completed window (carried across reads)
+        self._group_avg: dict[str, list[int]] = {}
+        self._avg_carry: dict[str, np.ndarray] = {}
+        self._group_rate: dict[str, float] = {}
         for group, rg in chmap.rate_groups.items():
             tags = [c.tag for c in inputs if c.rate_group == group]
             otags = [c.tag for c in self._outputs] if group == output_group else []
@@ -241,8 +250,11 @@ class AcquisitionService:
                     f"{self.scan_rate_hz} Hz"
                 )
             self._group_decim[group] = round(factor)
+            self._group_rate[group] = rg.rate_hz
             self._group_cols[group] = [self._scan_names.index(chmap.by_tag(t).hw) for t in tags]
             self._group_phys[group] = {t: k for k, t in enumerate(tags)}
+            self._group_avg[group] = [k for k, t in enumerate(tags) if chmap.by_tag(t).average]
+            self._avg_carry[group] = np.empty((0, len(self._group_avg[group])))
             self.rings[group] = RingBuffer(tags + otags + dtags, rg.rate_hz, capacity_s)
         self._output_group = output_group
         self._tag_group = (
@@ -277,26 +289,66 @@ class AcquisitionService:
     async def start(self) -> None:
         self._samples_in = 0
         self._epoch_sample = 0
+        self._clear_avg_carry()
         await self._start_stream()
         self._stream_epoch = time.time()
         self.stream_ok, self.stream_error = True, None
         self._task = asyncio.create_task(self._run(), name="acquisition")
 
-    async def _start_stream(self) -> None:
+    async def _start_stream(self, first: int = 0) -> None:
+        """Start the stream at the first rate from `_stream_rates[first:]` the
+        device accepts (a restart resumes from the rate that worked)."""
         # per-channel range + single-ended/differential, before the stream
         # starts (stream mode honours both); the T7 defaults are +-10 V vs GND,
         # and a power-cycled T7 is back at those defaults after a restart
         if settings := self._chmap.ain_settings():
             names, values = zip(*settings, strict=True)
             await asyncio.to_thread(self._iface.write_names, list(names), list(values))
-        # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
-        self._scans_per_read = max(1, round(self.scan_rate_hz / STREAM_READS_HZ))
-        actual = await asyncio.to_thread(
-            self._iface.stream_start, self._scan_names, self.scan_rate_hz, self._scans_per_read
-        )
-        if abs(actual - self.scan_rate_hz) / self.scan_rate_hz > 0.01:
-            log.warning("device stream rate %.1f != requested %.1f", actual, self.scan_rate_hz)
+        rates = self._stream_rates
+        for i in range(first, len(rates)):
+            rate = rates[i]
+            # ~40 reads/s: 25 ms blocks keep glass-to-glass latency low
+            self._scans_per_read = max(1, round(rate / STREAM_READS_HZ))
+            actual = await asyncio.to_thread(
+                self._iface.stream_start, self._scan_names, rate, self._scans_per_read
+            )
+            if len(rates) == 1:
+                break
+            try:
+                await self._first_block()
+                break
+            except StreamRateError as e:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(self._iface.stream_stop)
+                if i == len(rates) - 1:
+                    raise
+                log.warning(
+                    "device cannot scan the list at %g Hz (%s); trying %g Hz", rate, e, rates[i + 1]
+                )
+        if abs(actual - rate) / rate > 0.01:
+            log.warning("device stream rate %.1f != requested %.1f", actual, rate)
+        self._rate_idx = i
+        for group, group_rate in self._group_rate.items():
+            self._group_decim[group] = round(rate / group_rate)
         self.scan_rate_hz = actual
+        if len(rates) > 1:
+            log.info(
+                "stream at %g Hz; averaged channels use %s scans per sample",
+                rate,
+                ", ".join(f"{g}: {self._group_decim[g]}" for g, a in self._group_avg.items() if a),
+            )
+
+    async def _first_block(self, timeout_s: float = 1.0) -> None:
+        """Wait for the first stream data: the T7 reports a scan list it cannot
+        complete in one period (STREAM_SCAN_OVERLAP) there, not at start. The
+        block is dropped; sample times start once the stream is confirmed."""
+        t_end = time.monotonic() + timeout_s
+        while time.monotonic() < t_end:
+            block, _ = await asyncio.to_thread(self._iface.stream_read)
+            if len(block):
+                return
+            await asyncio.sleep(STREAM_POLL_S)
+        raise DeviceError(f"no stream data within {timeout_s:g} s")
 
     async def stop(self) -> None:
         if self._task:
@@ -351,7 +403,7 @@ class AcquisitionService:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(self._iface.stream_stop)
             try:
-                await self._start_stream()
+                await self._start_stream(self._rate_idx)
                 break
             except Exception as e:
                 log.debug("stream restart attempt %d failed: %s", attempts, e)
@@ -361,6 +413,7 @@ class AcquisitionService:
         # recordings need increasing time).
         self._stream_epoch = max(time.time(), gap_start)
         self._epoch_sample = self._samples_in
+        self._clear_avg_carry()  # a window cut by the outage is not averaged across it
         gap_end = self._stream_epoch
         self.stream_ok, self.stream_error = True, None
         log.warning(
@@ -376,6 +429,27 @@ class AcquisitionService:
 
     # -- data path ---------------------------------------------------------
 
+    def _clear_avg_carry(self) -> None:
+        for group, avg in self._group_avg.items():
+            self._avg_carry[group] = np.empty((0, len(avg)))
+
+    def _window_means(self, group: str, volts: np.ndarray, ends: np.ndarray) -> np.ndarray:
+        """Mean volts of each window ending at a True row of `ends`, including
+        scans carried over from earlier reads. Skipped scans (LJM_DUMMY_VALUE)
+        are left out; a window with no valid scan is NaN. The first window
+        after a start or restart can be shorter than a full period."""
+        buf = np.vstack([self._avg_carry[group], volts])
+        valid = buf > -9000.0
+        zero = np.zeros((1, buf.shape[1]))
+        sums = np.vstack([zero, np.cumsum(np.where(valid, buf, 0.0), axis=0)])
+        counts = np.vstack([zero, np.cumsum(valid, axis=0)])
+        last = len(self._avg_carry[group]) + np.flatnonzero(ends)  # inclusive, in buf rows
+        first = np.concatenate([[0], last[:-1] + 1])
+        with np.errstate(invalid="ignore", divide="ignore"):
+            means = (sums[last + 1] - sums[first]) / (counts[last + 1] - counts[first])
+        self._avg_carry[group] = buf[last[-1] + 1 :] if len(last) else buf
+        return means
+
     def _ingest(self, volts: np.ndarray) -> None:
         n = len(volts)
         if n == 0:
@@ -388,9 +462,7 @@ class AcquisitionService:
         idx = self._samples_in + np.arange(n)
         t = self._stream_epoch + (idx - self._epoch_sample) / self.scan_rate_hz
         n_in = len(self._converters)
-        eu = np.empty((n, n_in), dtype=np.float64)
-        for j, conv in enumerate(self._converters):
-            eu[:, j] = conv(volts[:, j], self._cj_degc)
+        for j in range(n_in):
             self._latest_raw[self._scan_channels[j].tag] = float(volts[-1, j])
         if self._outputs:
             raw = volts[:, n_in]
@@ -406,11 +478,23 @@ class AcquisitionService:
         blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         for group in self.rings:
             decim = self._group_decim[group]
-            mask = idx % decim == 0
+            avg = self._group_avg[group]
+            cols = self._group_cols[group]
+            if avg:
+                # one sample per completed window, stamped at its last scan
+                mask = idx % decim == decim - 1
+                means = self._window_means(group, volts[:, [cols[k] for k in avg]], mask)
+            else:
+                mask = idx % decim == 0
             if not mask.any():
                 continue
-            gt = t[mask]
-            gv = eu[np.ix_(mask, self._group_cols[group])]
+            rows = np.flatnonzero(mask)
+            gt = t[rows]
+            # convert only the kept samples (the stream may run far faster)
+            gv = np.empty((len(rows), len(cols)), dtype=np.float64)
+            for k, col in enumerate(cols):
+                v = means[:, avg.index(k)] if k in avg else volts[rows, col]
+                gv[:, k] = self._converters[col](v, self._cj_degc)
             if group == self._output_group:
                 gv = np.column_stack([gv, states[mask]])
             blocks[group] = (gt, gv)

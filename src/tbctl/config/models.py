@@ -41,6 +41,13 @@ MAX_OUTPUT_BITS = 16
 # in the lower half of its 16-channel block (AIN48/AIN56 ... AIN55/AIN63).
 AIN_RANGES = (10.0, 1.0, 0.1, 0.01)
 SINGLE_ENDED = 199
+# A channel with `average: true` records the mean of all stream scans in each
+# of its sample periods; the stream then runs at the first of these rates the
+# T7 accepts for the scan list (each +-0.1 V input needs long settling: three
+# of them already rule out 200 Hz). Any of them spaces its scans evenly over a
+# 20 ms period, so at 50 Hz mains hum cancels; noise drops ~sqrt(scans).
+AVERAGE_STREAM_RATES_HZ = (1000.0, 500.0, 250.0, 200.0, 100.0)
+AVERAGE_STREAM_HZ = AVERAGE_STREAM_RATES_HZ[0]
 
 
 def ain_number(hw: str) -> int:
@@ -171,6 +178,8 @@ class AnalogInChannel(StrictModel):
     negative_ch: str | None = None
     cal: Cal = PolynomialCal(kind="polynomial", coeffs=[0.0, 1.0])
     rate_group: str = "default"
+    # mean of the stream scans in each sample period (see AVERAGE_STREAM_HZ)
+    average: bool = False
 
     @field_validator("hw")
     @classmethod
@@ -202,6 +211,8 @@ class ThermocoupleChannel(StrictModel):
     range: float = 0.1
     negative_ch: str | None = None  # thermocouples are usually wired differential
     rate_group: str = "default"
+    # mean of the stream scans in each sample period (see AVERAGE_STREAM_HZ)
+    average: bool = False
 
     @field_validator("hw")
     @classmethod
@@ -323,6 +334,20 @@ class ChannelMap(StrictModel):
         for c in self.channels:
             if isinstance(c, InputChannel) and c.rate_group not in self.rate_groups:
                 raise ValueError(f"{c.tag}: unknown rate_group {c.rate_group!r}")
+        if any(c.average for c in self.inputs()):
+            stream = self.stream_rate_hz()
+            for c in self.inputs():
+                rate = self.rate_groups[c.rate_group].rate_hz
+                if abs(stream / rate - round(stream / rate)) > 1e-9:
+                    raise ValueError(
+                        f"{c.tag}: rate group {c.rate_group} ({rate:g} Hz) must divide the "
+                        f"stream rate, {stream:g} Hz with averaging on"
+                    )
+                if c.average and rate >= stream:
+                    raise ValueError(
+                        f"{c.tag}: average has no effect at {rate:g} Hz, the stream rate "
+                        "(each sample is a single scan)"
+                    )
         # derived channels: refs must be existing physical inputs (no chaining)
         physical = {c.tag for c in self.channels if isinstance(c, InputChannel)}
         from tbctl.config.expr import expr_refs
@@ -356,6 +381,35 @@ class ChannelMap(StrictModel):
     def inputs(self) -> list[InputChannel]:
         """Physical (hardware-scanned) input channels."""
         return [c for c in self.channels if isinstance(c, InputChannel)]
+
+    def stream_rate_hz(self) -> float:
+        """T7 scan rate: the fastest input rate group, raised to
+        AVERAGE_STREAM_HZ when any channel averages."""
+        inputs = self.inputs()
+        fastest = max((self.rate_groups[c.rate_group].rate_hz for c in inputs), default=50.0)
+        if any(c.average for c in inputs):
+            return max(fastest, AVERAGE_STREAM_HZ)
+        return fastest
+
+    def stream_rate_candidates(self) -> list[float]:
+        """Stream rates to try, fastest first. Without averaging only the one
+        rate; with it, also every slower AVERAGE_STREAM_RATES_HZ that all input
+        groups divide and that still gives averaged channels >= 2 scans."""
+        preferred = self.stream_rate_hz()
+        inputs = self.inputs()
+        averaged = [self.rate_groups[c.rate_group].rate_hz for c in inputs if c.average]
+        if not averaged:
+            return [preferred]
+        groups = {self.rate_groups[c.rate_group].rate_hz for c in inputs}
+        slower = [
+            r
+            for r in AVERAGE_STREAM_RATES_HZ
+            if r < preferred
+            and r >= 2 * max(averaged)
+            and r >= max(groups)
+            and all(abs(r / g - round(r / g)) < 1e-9 for g in groups)
+        ]
+        return [preferred, *slower]
 
     def ain_settings(self) -> list[tuple[str, float]]:
         """(register, value) pairs configuring every scanned AIN: range and
