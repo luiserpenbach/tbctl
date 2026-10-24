@@ -1,6 +1,6 @@
 """WebSocket publisher (spec §7): server->client msgpack messages.
 
-Messages: `frame` (live data, ~10 Hz), `seq_status` (sequencer register
+Messages: `frame` (live data, 25 Hz), `seq_status` (sequencer register
 mirror, ~10 Hz), `event` (lifecycle events). Client->server (JSON text):
 {"op": "subscribe"|"unsubscribe", "tags": [...]}. No control over WS —
 all control is REST (D6).

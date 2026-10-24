@@ -23,7 +23,8 @@ loss), T7 hardware watchdog (Lua death), hardwired E-stop (outside
 software). Valve and igniter states are streamed with the sensors and
 recorded as 0/1 channels.
 
-Decisions D1–D12 of the original project spec are frozen.
+Decisions D1–D12 of the original project spec are frozen. The longer
+version, with diagrams: [`docs/architecture.md`](docs/architecture.md).
 
 ## Quick start (development, no hardware)
 
