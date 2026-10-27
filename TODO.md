@@ -150,8 +150,14 @@ valve power off, 50 Hz stream, Windows laptop; branch `fix/hw-checkout-usb`):
       connection you will fire with. USB done 2026-10-22 (bench checkout
       above), re-run after merging main's restart change: abort CMD 4.8 ms
       median, USB pull -> one 12.1 s gap (back-off), `stream_restart`
-      event, AIN range restored, sequencer.lua back from flash. Ethernet
-      still open.
+      event, AIN range restored, sequencer.lua back from flash.
+      Ethernet abort latency done 2026-10-27 (T7 at 192.168.10.20 static
+      per docs/deployment.md §3, laptop on the same /24, 100 Mbps; stream
+      at 100 Hz with an averaged TC; 10 trials via the node API, no logic
+      analyser): CMD write 6.5 ms median, 4.9-9.3 ms except the first
+      trial (20.8 ms); ABORTING seen 12.4 ms median incl. a ~4 ms register
+      peek (USB: 4.8 / 8.8 ms). Still open on Ethernet: the cable-pull
+      stream restart (and Test 3, heartbeat-loss abort).
 - [ ] Fill in the sign-off table.
 
 ## 4. Sensor and actuator checkout
