@@ -26,7 +26,13 @@ each section assumes the ones above it are done.
       exciter, glow plug, torch) and its maximum on-time (`max_on_ms`).
 - [ ] Input budget: the T7 has 14 native AINs (more with a Mux80). Decide
       which channels need 1 kHz (chamber PT for combustion stability?). All
-      fast channels share one stream rate.
+      fast channels share one stream rate, and every input is in that
+      stream. Measured on the bench T7 (2026-10-23): each ±0.1 V input
+      (thermocouples, load cells) needs long settling; with three of them the
+      scan list only streams at 100 Hz, and 200-1000 Hz fail at start with
+      `STREAM_SCAN_OVERLAP`. Without them 1 kHz works. So a 1 kHz channel
+      needs few or no ±0.1 V inputs in the same stream, a tested
+      `STREAM_SETTLING_US`, or a second T7.
 
 ## 1. Replace the example configs
 

@@ -5,8 +5,10 @@ channel averages: the first of AVERAGE_STREAM_RATES_HZ the T7 accepts); slower
 rate groups are decimated by an integer factor into their own ring buffers,
 either keeping one scan per sample period or, for `average: true` channels,
 the mean of all of them.
-v1 ships with everything at 50 Hz, but the rate-group mechanism already
-carries a future 1 kHz group (D4).
+How fast the T7 can scan depends on the inputs: each +-0.1 V input needs long
+settling, and on the bench T7 three of them limit the scan list to 100 Hz. A
+faster group with such inputs in the same stream fails at start
+(STREAM_SCAN_OVERLAP); only averaging falls back to a slower rate by itself.
 """
 
 from __future__ import annotations

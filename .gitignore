@@ -10,4 +10,5 @@ data/runs/
 logs/
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 .DS_Store

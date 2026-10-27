@@ -25,7 +25,10 @@ device:
 
 rate_groups:
   default: {rate_hz: 50}
-  fast:    {rate_hz: 1000}   # for a 1 kHz chamber PT (combustion stability)
+  # for a 1 kHz chamber PT (combustion stability). Unused here: the whole scan
+  # list then streams at 1 kHz, and +-0.1 V inputs (TCs, load cell) settle too
+  # slowly for that on the bench T7 (three of them: 100 Hz max). See TODO §0.
+  fast:    {rate_hz: 1000}
 
 channels:
   # ---- pressures (0-5 V transducers, engineering units via polynomial) ----
