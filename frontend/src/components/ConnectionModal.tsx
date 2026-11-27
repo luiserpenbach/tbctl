@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { post } from "../api";
 
 interface ConnInfo {
@@ -70,7 +71,9 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
     </div>
   );
 
-  return (
+  // portalled to <body>: the status bar's backdrop-filter would otherwise be
+  // the containing block of the fixed overlay and pin the dialog to the top
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">connection</div>
@@ -144,6 +147,7 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

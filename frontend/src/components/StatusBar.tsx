@@ -82,6 +82,15 @@ function ThemeSwitch() {
   );
 }
 
+const BERLIN = new Intl.DateTimeFormat("de-DE", {
+  timeZone: "Europe/Berlin",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short",
+});
+
 function MissionClock() {
   const seq = useStore((s) => s.seqStatus);
   const status = useStore((s) => s.status);
@@ -91,11 +100,17 @@ function MissionClock() {
     return () => clearInterval(iv);
   }, []);
 
-  const utc = now.toISOString().slice(11, 19);
   const state = seq?.state ?? status?.sequencer.state ?? "";
   const rec = status?.recording;
 
-  let cell = { cls: "", label: "Local", value: now.toLocaleTimeString(undefined, { hour12: false }) };
+  // German time whatever the browser's zone; the label follows DST (MEZ / MESZ)
+  const parts = BERLIN.formatToParts(now);
+  const part = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  let cell = {
+    cls: "",
+    label: part("timeZoneName") || "MEZ",
+    value: `${part("hour")}:${part("minute")}:${part("second")}`,
+  };
   if (state === "RUNNING") cell = { cls: "t-plus", label: "T+ fire", value: mmss(seq?.elapsed_ms ?? 0) };
   else if (state === "ABORTING") cell = { cls: "abort", label: "Abort", value: mmss(seq?.elapsed_ms ?? 0) };
   else if (state === "ARMED") cell = { cls: "armed", label: "Armed", value: "T− HOLD" };
@@ -104,10 +119,6 @@ function MissionClock() {
 
   return (
     <div className="mission-clock" title="mission clock">
-      <div className="clock-cell utc">
-        <span className="clock-label">UTC</span>
-        <span className="clock-value">{utc}</span>
-      </div>
       <div className={`clock-cell ${cell.cls || "local"}`}>
         <span className="clock-label">{cell.label}</span>
         <span className="clock-value">{cell.value}</span>

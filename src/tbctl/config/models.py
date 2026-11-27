@@ -693,6 +693,8 @@ class PidSensorElement(StrictModel):
     decimals: int = Field(default=1, ge=0, le=5)
     warn_min: float | None = None
     warn_max: float | None = None
+    # font height, fraction of canvas width; None = fixed 12 px readout
+    size: float | None = Field(default=None, gt=0, le=0.2)
 
 
 class PidLabelElement(StrictModel):
@@ -702,6 +704,7 @@ class PidLabelElement(StrictModel):
     x: float = Field(ge=0, le=1)
     y: float = Field(ge=0, le=1)
     size: float = Field(default=0.022, gt=0, le=0.2)  # font height, fraction of width
+    rotation: float = Field(default=0.0, ge=-360, le=360)
 
 
 PidElement = Annotated[
@@ -713,6 +716,11 @@ PidElement = Annotated[
 class PidConfig(StrictModel):
     name: str
     background: str | None = None  # asset filename under configs/pid/assets/
+    # placement of the background on the sheet: scale 1 at offset 0/0 fills
+    # it; offsets are fractions of the sheet, of the image's top-left corner
+    background_scale: float = Field(default=1.0, ge=0.05, le=10)
+    background_x: float = Field(default=0.0, ge=-10, le=10)
+    background_y: float = Field(default=0.0, ge=-10, le=10)
     elements: list[PidElement] = []
 
     @field_validator("name")
