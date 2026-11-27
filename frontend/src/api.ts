@@ -292,12 +292,24 @@ export type PidElement =
       decimals?: number;
       warn_min?: number;
       warn_max?: number;
+      size?: number | null;
     }
-  | { id: string; type: "label"; text: string; x: number; y: number; size?: number };
+  | {
+      id: string;
+      type: "label";
+      text: string;
+      x: number;
+      y: number;
+      size?: number;
+      rotation?: number;
+    };
 
 export interface PidConfigT {
   name: string;
   background?: string | null;
+  background_scale?: number;
+  background_x?: number;
+  background_y?: number;
   elements: PidElement[];
 }
 
